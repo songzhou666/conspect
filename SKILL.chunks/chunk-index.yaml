@@ -1,0 +1,21 @@
+# conspect 分块索引
+# 按激活频率分级，控制上下文大小
+# 版本: 1.0
+
+always_load:
+  - chunk-01-overview  # 概览与触发（始终加载）
+
+high_frequency:
+  - chunk-02-workflow  # 核心工作流
+
+medium_frequency:
+  - chunk-03-data-pipeline  # 数据流水线
+  - chunk-04-rendering      # 渲染引擎
+
+low_frequency:
+  - chunk-05-quality        # 质量审核体系
+
+chunk_rules:
+  max_active_chunks: 5
+  load_on_demand: true
+  auto_unload: true

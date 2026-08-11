@@ -8,6 +8,42 @@
 
 1. **【EMOJI 禁令 — 最高优先级】** 你在生成的 HTML/JS/CSS 代码、文本内容、图表标题、坐标轴标签、tooltip、数据解读区、KPI 卡片等所有输出产物中**绝对禁止**使用任何 emoji 或表情符号。所有视觉装饰和标记用纯 CSS 样式实现。违规输出将被 QA Agent 判定为 P0 阻断。
 2. **【禁止内嵌明细数据】** HTML 中不得嵌入原始明细数据表格的全部行，仅渲染图表必需的聚合数据。
+3. **【禁止自写 HTML 脚本 — v3.0 强制】** **禁止** AI 自己编写 `_gen_dashboard.py` 等自定义脚本生成 HTML 看板。所有看板渲染**必须**通过 CLI 的 `render_dashboard` 动作完成，使用增强版 RenderEngine。违规输出将被 QA Agent 判定为 P0 阻断。
+   - 禁止：自己写 Python 脚本拼接 HTML 字符串
+   - 禁止：自己写 ECharts option JSON 硬编码到 HTML
+   - 禁止：自己写 CSS 样式（必须用 RenderEngine 的主题系统）
+   - 正确：调用 `build_dashboard_layout` 构建布局 → `render_dashboard` 渲染 HTML → `save_report` 保存
+
+### v3.0 渲染流程（强制使用 RenderEngine）
+
+看板渲染必须按以下三步执行，**不得跳过任何一步**：
+
+```powershell
+cd {CLI_DIR}
+
+# 步骤1：构建分区式布局（自动按主题分组图表、配数据解读）
+python run.py build_dashboard_layout '{"analysis": {...}, "insights": [...], "preferences": {...}}'
+
+# 步骤2：渲染 HTML（使用增强版 RenderEngine，支持分区/便当盒网格/数据解读区）
+python run.py render_dashboard '{"layout": <步骤1的输出>, "theme": "bento"}'
+
+# 步骤3：保存到 harness 目录
+python run.py save_report '{"content": "<步骤2的html>", "filename": "_cs-dashboard.html", "output_dir": "{项目路径}/.agent/harness"}'
+```
+
+**可选主题**（参考 `docs/UI_style.md`）：
+- `ocean` 沧海商务（默认，沉稳专业）
+- `bento` 便当盒网格（苹果浅灰底+白卡，适合仪表盘）
+- `editorial` 杂志编辑（奶白纸底+墨黑+古金，适合正式年报）
+- `aurora_dark` 极光科技深色（深蓝夜空+霓虹光晕，适合大屏投屏）
+- `warm` 朝霞温暖、`forest` 森林雅致、`minimal` 极简商务、`aurora` 极光科技
+
+### 渲染质量要求（v3.0）
+
+1. **分区布局**：图表必须按主题分组到不同分区（核心概览/维度对比/构成分析/转化漏斗/交叉分析），禁止 20 个图表并排堆砌
+2. **数据解读区**：每个图表必须有数据解读文字（description 字段），标注洞察级别（核心/机会/风险/基础）
+3. **主次分明**：关键图表（如趋势图、漏斗图）应 span=2 占双列，次要图表 span=1
+4. **配色统一**：必须使用 RenderEngine 主题系统，禁止硬编码颜色
 
 ### CLI 调用规范（强制）
 

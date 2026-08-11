@@ -1,21 +1,21 @@
 """
-vision_tools 工具层入口
+conspect_tools 工具层入口（v3.0 稳定性增强版）
 提供CLI接口供Agent调用
 
 注意 - PowerShell 正确调用方式：
   [正确] 先 cd 到本文件所在目录，再用相对路径：
      cd {CLI_DIR}
      python run.py <action> '<json_params>'
-  
+
   [正确] 如果使用绝对路径，用 & 调用符：
      & "python.exe" "{CLI_DIR}/run.py" <action> '<json_params>'
-  
+
   [错误] 不要两个路径参数都用引号：
      "python.exe" "run.py" ...  # 这会导致 PowerShell ParserError
 
 使用方式:
     python run.py <action> '<params_json>'
-    
+
 示例:
     python run.py load '{"file_paths": ["数据源文件.xlsx"]}'
     python run.py analyze '{"file_paths": ["数据源文件.xlsx"]}'
@@ -23,14 +23,31 @@ vision_tools 工具层入口
     python run.py quality_assess '{"file_paths": ["数据源文件.xlsx"]}'
     python run.py render_report '{"report_design": {...}}'
     python run.py save_report '{"content": "...", "filename": "report.md"}'
+    python run.py recognize_preferences '{"user_requirement": "用蓝色调，出 PDF"}'
+
+v3.0 变更：
+  - 新增 recognize_preferences 动作（替代原确认环节）
+  - 新增 ai_generate_insights_safe 动作（降级版洞察生成）
+  - 所有 action 增加异常降级处理，失败时返回结构化错误而非崩溃
+  - 新增诊断日志记录
 """
 import sys
 import json
+import logging
 from pathlib import Path
 from typing import Dict, Any
 
-# 确保vision_tools在路径中
+# 确保conspect_tools在路径中
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# v3.0：模块级日志器
+logger = logging.getLogger("conspect.run")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("[%(levelname)s] %(name)s: %(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+
 from conspect_tools.data_processor import DataProcessor
 from conspect_tools.data_feature_extractor import DataFeatureExtractor
 from conspect_tools.data_statistics import DataStatistics
@@ -99,13 +116,18 @@ def run(action: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
         注意：统计数据是辅助参考，AI Agent 仍需自主阅读原始数据进行业务洞察。
         """
         processor = DataProcessor()
-        dfs = processor.load_excel(params.get("file_paths", []))
+        file_paths = params.get("file_paths", [])
+        dfs = processor.load_excel(file_paths)
 
         # 可选的填充策略（由调用者传入，不传则只去重不填充）
         fill_strategy = params.get("fill_strategy")
 
         if not dfs:
-            return {"status": "ok", "data": {}}
+            # v3.0：文件不存在或无法加载时返回明确的错误信息，避免静默失败
+            missing = [p for p in file_paths if not Path(p).exists()]
+            if missing:
+                return {"status": "error", "message": f"文件不存在: {missing}", "data": {}}
+            return {"status": "error", "message": "数据加载失败，未读取到任何 Sheet", "data": {}}
 
         # 初始化统计模块
         from conspect_tools.data_statistics import DataStatistics
@@ -1048,11 +1070,11 @@ def run(action: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
     elif action == "save_index":
         """
         保存看板与报告的关联索引
-        
+
         参数:
             index: 索引字典
             filename: 文件名
-            
+
         返回:
             {
                 "status": "ok",
@@ -1061,26 +1083,168 @@ def run(action: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         index = params.get("index", {})
         filename = params.get("_cs-index.json", "_cs-index.json")
-        
+
         exporter = Exporter(output_dir=params.get("output_dir"))
         path = exporter.save_index(index, filename)
-        
+
         return {"status": "ok", "path": path}
+
+    # ===== v3.0 新增：用户偏好识别（替代原确认环节）=====
+
+    elif action == "recognize_preferences":
+        """
+        识别用户偏好（v3.0 新增，替代原确认环节）
+
+        从用户初始需求文本中自动识别配色、图表、输出格式等偏好，
+        识别失败时返回默认值，不阻断流程。
+
+        参数:
+            user_requirement: 用户初始需求文本
+
+        返回:
+            {
+                "status": "ok",
+                "preferences": {...},
+                "source": "recognized" | "default"
+            }
+        """
+        from conspect_tools.ai_agent import AIAgent
+
+        user_requirement = params.get("user_requirement", "")
+
+        agent = AIAgent()
+        preferences = agent.recognize_preferences(user_requirement)
+
+        # 判断是否识别到非默认值
+        source = "recognized" if user_requirement else "default"
+
+        return {
+            "status": "ok",
+            "preferences": preferences,
+            "source": source
+        }
+
+    elif action == "ai_generate_insights_safe":
+        """
+        生成洞察（安全版，v3.0 新增）
+
+        异常时返回降级结果（空洞察列表 + 错误信息），不阻断流程。
+
+        参数:
+            statistics: 统计数据
+            business_context: 业务场景描述
+
+        返回:
+            {
+                "status": "ok" | "fallback",
+                "insights": [...],
+                "recommendations": [...],
+                "error": null | "异常信息"
+            }
+        """
+        from conspect_tools.ai_agent import AIAgent
+
+        statistics = params.get("statistics", {})
+        business_context = params.get("business_context", "")
+
+        agent = AIAgent()
+        result = agent.generate_insights_safe(statistics, business_context)
+
+        return {
+            "status": result.get("status", "ok"),
+            "insights": [
+                {
+                    "category": i.category,
+                    "title": i.title,
+                    "description": i.description,
+                    "evidence": i.evidence,
+                    "severity": i.severity,
+                    "related_metrics": i.related_metrics
+                }
+                for i in result.get("insights", [])
+            ],
+            "recommendations": [
+                {
+                    "title": r.title,
+                    "description": r.description,
+                    "priority": r.priority,
+                    "expected_impact": r.expected_impact,
+                    "related_findings": r.related_findings
+                }
+                for r in result.get("recommendations", [])
+            ],
+            "error": result.get("error")
+        }
+
+    elif action == "build_dashboard_layout":
+        """
+        构建分区式看板布局（v3.0 新增）
+
+        自动将图表按主题分组到分区，每个图表配数据解读文字。
+        替代旧版"所有图表并排堆砌"的简陋布局。
+
+        参数:
+            analysis: 分析结果（含 kpis、charts、dimensions）
+            insights: 洞察列表（含 level/title/description）
+            preferences: 用户偏好（可选）
+
+        返回:
+            layout dict，可直接传入 render_dashboard 的 layout 参数
+        """
+        from conspect_tools.ai_agent import AIAgent
+
+        analysis = params.get("analysis", {})
+        insights = params.get("insights", [])
+        preferences = params.get("preferences", {})
+
+        agent = AIAgent()
+        layout = agent.build_dashboard_layout(analysis, insights, preferences)
+
+        return {"status": "ok", "layout": layout}
+
+    elif action == "render_dashboard":
+        """
+        渲染分区式看板 HTML（v3.0 新增）
+
+        使用增强版 RenderEngine 生成带分区、数据解读、便当盒网格的看板。
+        禁止 AI 自己写 HTML 脚本，必须通过此动作渲染。
+
+        参数:
+            layout: 布局配置（由 build_dashboard_layout 生成，或手工构建）
+            theme: 配色主题（ocean/warm/aurora/forest/minimal/bento/editorial/aurora_dark）
+
+        返回:
+            {"status": "ok", "html": "...完整HTML字符串..."}
+        """
+        from conspect_tools.render_engine import RenderEngine
+
+        layout = params.get("layout", {})
+        theme = params.get("theme", "")
+        # v3.1：theme 未显式指定时，从 preferences/layout 中自动读取，回退 ocean
+        if not theme:
+            theme = (params.get("preferences") or {}).get("color_scheme", "")
+        if not theme:
+            theme = layout.get("color_scheme", "ocean")
+
+        engine = RenderEngine(theme_name=theme)
+        html = engine.render_web_dashboard(layout)
+
+        return {"status": "ok", "html": html, "theme": theme}
 
     return {"status": "error", "message": f"Unknown action: {action}"}
 
 
 def main():
-    """CLI入口点"""
+    """CLI入口点（v3.0 增强异常处理与诊断日志）"""
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(1)
-    
+
     action = sys.argv[1]
-    
+
     # 读取参数（优先级：--params-file > 命令行JSON > 标准输入）
     params = {}
-    
+
     if len(sys.argv) > 2:
         # 支持 --params-file / -p 从文件读取JSON（推荐，绕过PowerShell引号问题）
         if sys.argv[2] in ("--params-file", "-p") and len(sys.argv) > 3:
@@ -1105,12 +1269,27 @@ def main():
             params = json.loads(input_data) if input_data.strip() else {}
         except json.JSONDecodeError:
             params = {}
-    
+
     try:
         result = run(action, params)
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        # v3.0：返回 status=error 时以非零退出码退出，便于 Shell 脚本检测
+        if isinstance(result, dict) and result.get("status") == "error":
+            sys.exit(1)
+    except KeyboardInterrupt:
+        # v3.0：用户中断时优雅退出
+        logger.warning("用户中断执行: action=%s", action)
+        print(json.dumps({"status": "error", "message": "User interrupted"}, ensure_ascii=False))
+        sys.exit(130)
     except Exception as e:
-        print(json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False))
+        # v3.0：记录诊断日志后返回结构化错误
+        logger.exception("CLI 执行异常: action=%s, error=%s", action, e)
+        print(json.dumps({
+            "status": "error",
+            "message": str(e),
+            "action": action,
+            "error_code": "E500"
+        }, ensure_ascii=False))
         sys.exit(1)
 
 

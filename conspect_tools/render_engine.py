@@ -54,6 +54,30 @@ class ColorTheme:
             "border": "#E2E8F0",
             "gradient": ["#1A1A2E", "#2D3748"],
         },
+        "bento": {      # 便当盒网格（参考 UI_style.md #21）：苹果浅灰底 + 白卡，适合仪表盘
+            "primary": ["#0071E3", "#0A84FF", "#5AC8FA"],
+            "secondary": ["#FF453A", "#32D74B", "#FF9500", "#BF5AF2", "#FFD60A", "#64D2FF"],
+            "bg": "#F5F5F7", "card_bg": "#FFFFFF",
+            "text": "#1D1D1F", "text_secondary": "#86868B",
+            "border": "#D2D2D7",
+            "gradient": ["#0071E3", "#5AC8FA"],
+        },
+        "editorial": {  # 杂志编辑风（参考 UI_style.md #47）：奶白纸底 + 墨黑 + 古金，适合正式年报
+            "primary": ["#1A1A1A", "#2C3E50", "#34495E"],
+            "secondary": ["#B76E2E", "#8B0000", "#C0392B", "#7F8C8D", "#D4AC0D"],
+            "bg": "#F7F4EF", "card_bg": "#FFFFFF",
+            "text": "#1A1A1A", "text_secondary": "#5D6D7E",
+            "border": "#E5E0D8",
+            "gradient": ["#1A1A1A", "#B76E2E"],
+        },
+        "aurora_dark": { # 极光科技深色（参考 UI_style.md #10）：深蓝夜空 + 霓虹光晕，适合大屏投屏
+            "primary": ["#6366F1", "#A855F7", "#3B82F6"],
+            "secondary": ["#EC4899", "#06B6D4", "#F59E0B", "#10B981", "#8B5CF6", "#EF4444"],
+            "bg": "#0F172A", "card_bg": "#1E293B",
+            "text": "#F1F5F9", "text_secondary": "#94A3B8",
+            "border": "#334155",
+            "gradient": ["#6366F1", "#A855F7"],
+        },
     }
 
     @classmethod
@@ -171,7 +195,6 @@ class ChartBuilder:
         opt["xAxis"], opt["yAxis"] = opt["yAxis"], opt["xAxis"]
         for s in opt["series"]:
             s["itemStyle"]["borderRadius"] = [0, 4, 4, 0]
-            s["animationDelay"] = lambda idx: idx * 80
         return opt
 
     @staticmethod
@@ -283,7 +306,8 @@ class ChartBuilder:
             "yAxis": {"type": "value", "splitLine": {"lineStyle": {"color": theme["border"], "type": "dashed"}}, "axisLabel": {"color": theme["text_secondary"]}},
             "series": [{
                 "type": "scatter", "data": series_data,
-                "symbolSize": lambda v: max(5, min(50, v[2] if len(v) > 2 else 10)),
+                # v3.1：symbolSize 使用 [min,max] 范围（ECharts 按数据值自动映射），替代 lambda
+                "symbolSize": [5, 50],
                 "itemStyle": {"shadowBlur": 10, "shadowColor": "rgba(0,0,0,0.1)"},
                 "emphasis": {"itemStyle": {"shadowBlur": 20, "shadowColor": "rgba(0,0,0,0.2)"}},
                 **ChartBuilder.get_animation_config(),
@@ -388,7 +412,6 @@ class ChartBuilder:
                 "gridSize": 10, "sizeRange": [12, 50],
                 "rotationRange": [-45, 45], "shape": "circle",
                 "width": "100%", "height": "100%",
-                "textStyle": {"color": lambda p: colors[p.dataIndex % len(colors)]},
                 "data": items,
             }],
         }
@@ -441,12 +464,20 @@ class RenderEngine:
 
     def render_web_dashboard(self, layout: Dict) -> str:
         """
-        生成交互式Web看板HTML。
-        
+        生成交互式Web看板HTML（v3.0 增强版：支持分区/模块化布局）。
+
         参数:
             layout: 布局配置，包含 sections 列表
-                sections[].type: kpi_cards / chart / conclusion / custom
-                sections[].chart_type: line / bar / pie / funnel / radar / ...
+                sections[].type: kpi_cards / chart / conclusion / table / section_group / custom
+                sections[].type == "section_group"（分区容器，v3.0 新增）:
+                    - title: 分区标题（如"销售概览"）
+                    - description: 分区描述（1-2 句话，展示在标题下方）
+                    - columns: 该分区网格列数（默认 3，主图可设 2）
+                    - items: 子 section 列表（chart/table/conclusion）
+                sections[].type == "chart"（v3.0 增强）:
+                    - span: 占几列（默认 1，主图可设 2 或 "full"）
+                    - description: 该图表的数据解读文字（v3.0 新增，展示在图表下方）
+                    - insight_level: 解读级别（"核心"/"机会"/"风险"/"基础"），影响标签颜色
         返回:
             完整 HTML 字符串
         """
@@ -457,6 +488,11 @@ class RenderEngine:
             section_type = section.get("type", "")
             if section_type == "kpi_cards":
                 sections_html += self._render_kpi_cards(section.get("metrics", []))
+            elif section_type == "section_group":
+                # v3.0 新增：分区容器，渲染标题+描述+子图表网格
+                sections_html += self._render_section_group(section, chart_scripts_collector := [])
+                for s in chart_scripts_collector:
+                    chart_scripts += s
             elif section_type == "chart":
                 html, script = self._render_chart(section)
                 sections_html += html
@@ -470,6 +506,12 @@ class RenderEngine:
 
         # 统计图表数量用于布局
         chart_count = sum(1 for s in layout.get("sections", []) if s.get("type") == "chart")
+        chart_count += sum(
+            1 for s in layout.get("sections", [])
+            if s.get("type") == "section_group"
+            for _ in s.get("items", [])
+            if _.get("type") == "chart"
+        )
 
         html = self._build_html_template(
             title=layout.get("title", "数据报表"),
@@ -480,11 +522,57 @@ class RenderEngine:
         )
         return html
 
+    def _render_section_group(self, group: Dict, script_collector: list) -> str:
+        """
+        渲染分区容器（v3.0 新增）。
+        每个分区有标题、描述、列数配置，内部包含多个图表/表格。
+        支持"便当盒网格"：子项可指定 span 占多列。
+        """
+        t = self.theme
+        title = group.get("title", "")
+        description = group.get("description", "")
+        columns = group.get("columns", 3)
+        items = group.get("items", [])
+
+        # 限制列数在 1-4 之间
+        columns = max(1, min(4, int(columns)))
+
+        # 构建子项 HTML
+        items_html = ""
+        for item in items:
+            item_type = item.get("type", "")
+            if item_type == "chart":
+                html, script = self._render_chart(item)
+                items_html += html
+                script_collector.append(script)
+            elif item_type == "table":
+                items_html += self._render_table(item)
+            elif item_type == "conclusion":
+                items_html += self._render_conclusion(item.get("insights", []))
+            elif item_type == "custom":
+                items_html += item.get("html", "")
+
+        # 分区标题和描述
+        header_html = ""
+        if title:
+            header_html = f"""
+        <div class="section-header">
+            <h2 class="section-title">{title}</h2>
+            {f'<p class="section-desc">{description}</p>' if description else ''}
+        </div>"""
+
+        return f"""
+    <section class="section-group" style="--group-cols:{columns}">
+        {header_html}
+        <div class="section-grid">
+            {items_html}
+        </div>
+    </section>"""
+
     def _build_html_template(self, title: str, meta: str, sections_html: str,
                               chart_scripts: str, chart_count: int) -> str:
-        """构建完整 HTML 页面。"""
+        """构建完整 HTML 页面（v3.0 增强版：分区网格 + 数据解读区 + 便当盒布局）。"""
         t = self.theme
-        grid_cols = "1fr 1fr" if chart_count >= 2 else "1fr"
 
         return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -503,29 +591,71 @@ class RenderEngine:
         .header .meta {{ color: {t['text_secondary']}; font-size: 14px; margin-top: 8px; }}
         .header .divider {{ width: 60px; height: 3px; background: linear-gradient(90deg, {t['gradient'][0]}, {t['gradient'][1]});
                            margin: 16px auto 0; border-radius: 2px; }}
-        .kpi-row {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        /* KPI 卡片 */
+        .kpi-row {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
                     gap: 16px; margin-bottom: 28px; }}
         .kpi-card {{ background: {t['card_bg']}; border-radius: 14px; padding: 22px 24px;
                      box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.04);
-                     transition: transform 0.25s ease, box-shadow 0.25s ease; }}
+                     transition: transform 0.25s ease, box-shadow 0.25s ease;
+                     border-top: 3px solid {t['primary'][0]}; }}
         .kpi-card:hover {{ transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,0.08), 0 8px 24px rgba(0,0,0,0.06); }}
         .kpi-card .label {{ font-size: 13px; color: {t['text_secondary']}; margin-bottom: 6px;
                            text-transform: uppercase; letter-spacing: 0.5px; }}
-        .kpi-card .value {{ font-size: 34px; font-weight: 700; color: {t['text']};
+        .kpi-card .value {{ font-size: 32px; font-weight: 700; color: {t['text']};
                             font-family: 'Inter', 'Helvetica Neue', sans-serif; margin: 6px 0 8px; }}
         .kpi-card .change {{ font-size: 13px; display: flex; align-items: center; gap: 4px; }}
-        .kpi-card .change.up {{ color: {t['secondary'][0] if t['secondary'][0].startswith('#6F') else '#6FC3A0'}; }}
-        .kpi-card .change.down {{ color: {t['secondary'][2] if len(t['secondary']) > 2 else '#E86868'}; }}
-        .chart-grid {{ display: grid; grid-template-columns: {grid_cols}; gap: 20px; margin-bottom: 28px; }}
-        @media (max-width: 900px) {{ .chart-grid {{ grid-template-columns: 1fr; }} .dashboard {{ padding: 16px; }} }}
-        .chart-box {{ background: {t['card_bg']}; border-radius: 14px; padding: 20px;
-                      box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.04); }}
-        .chart-box .chart-title {{ font-size: 16px; font-weight: 600; margin-bottom: 14px;
-                                   color: {t['text']}; display: flex; align-items: center; gap: 8px; }}
-        .chart-container {{ width: 100%; height: 380px; }}
+        .kpi-card .change.up {{ color: #32D74B; }}
+        .kpi-card .change.down {{ color: #FF453A; }}
 
-        /* 明细表格 — table-layout:fixed 强制列对齐 */
-        .table-wrapper {{ background: {t['card_bg']}; border-radius: 14px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.04); overflow: hidden; }}
+        /* v3.0 分区容器（section_group）— 便当盒网格 */
+        .section-group {{ margin-bottom: 36px; }}
+        .section-header {{ margin-bottom: 16px; padding-left: 4px; }}
+        .section-title {{ font-size: 20px; font-weight: 700; color: {t['text']};
+                          display: flex; align-items: center; gap: 10px; }}
+        .section-title::before {{ content: ""; display: inline-block; width: 4px; height: 22px;
+                                   border-radius: 2px; background: linear-gradient(180deg, {t['gradient'][0]}, {t['gradient'][1]}); }}
+        .section-desc {{ font-size: 14px; color: {t['text_secondary']}; margin-top: 6px; margin-left: 14px; line-height: 1.6; }}
+        .section-grid {{ display: grid; grid-template-columns: repeat(var(--group-cols, 3), 1fr); gap: 18px; }}
+
+        /* 图表卡片 — 支持 span 跨列 */
+        .chart-box {{ background: {t['card_bg']}; border-radius: 14px; padding: 18px 20px;
+                      box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.04);
+                      display: flex; flex-direction: column; }}
+        .chart-box[data-span="2"] {{ grid-column: span 2; }}
+        .chart-box[data-span="3"] {{ grid-column: span 3; }}
+        .chart-box[data-span="full"] {{ grid-column: 1 / -1; }}
+        .chart-box .chart-title {{ font-size: 15px; font-weight: 600; margin-bottom: 12px;
+                                   color: {t['text']}; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }}
+        .chart-container {{ width: 100%; height: 340px; }}
+        .chart-box[data-span="2"] .chart-container {{ height: 380px; }}
+        .chart-box[data-span="full"] .chart-container {{ height: 420px; }}
+
+        /* v3.0 数据解读区 — 每个图表下方的分析文字 */
+        .chart-insight {{ margin-top: 12px; padding: 10px 14px; border-radius: 8px;
+                          font-size: 13px; line-height: 1.65; color: {t['text_secondary']};
+                          border-left: 3px solid {t['primary'][0]};
+                          background: {t['bg']}; }}
+        .chart-insight[data-level="核心"] {{ border-left-color: {t['primary'][0]}; background: {t['primary'][0]}0D; }}
+        .chart-insight[data-level="机会"] {{ border-left-color: #32D74B; background: #32D74B0D; }}
+        .chart-insight[data-level="风险"] {{ border-left-color: #FF453A; background: #FF453A0D; }}
+        .chart-insight[data-level="基础"] {{ border-left-color: {t['text_secondary']}; }}
+        .insight-tag {{ display: inline-block; padding: 1px 8px; border-radius: 10px;
+                        font-size: 11px; font-weight: 600; margin-right: 6px; vertical-align: middle; }}
+        .insight-tag[data-level="核心"] {{ background: {t['primary'][0]}; color: #fff; }}
+        .insight-tag[data-level="机会"] {{ background: #32D74B; color: #fff; }}
+        .insight-tag[data-level="风险"] {{ background: #FF453A; color: #fff; }}
+        .insight-tag[data-level="基础"] {{ background: {t['text_secondary']}; color: #fff; }}
+
+        /* 兼容旧版 .chart-grid（非分区模式） */
+        .chart-grid {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; margin-bottom: 28px; }}
+        @media (max-width: 900px) {{ .chart-grid {{ grid-template-columns: 1fr; }}
+                                      .section-grid {{ grid-template-columns: 1fr !important; }}
+                                      .chart-box[data-span="2"], .chart-box[data-span="3"], .chart-box[data-span="full"] {{ grid-column: 1; }}
+                                      .dashboard {{ padding: 16px; }} }}
+
+        /* 明细表格 */
+        .table-wrapper {{ background: {t['card_bg']}; border-radius: 14px; margin-bottom: 20px;
+                          box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.04); overflow: hidden; }}
         .table-header {{ display: flex; align-items: center; padding: 14px 20px; cursor: pointer; user-select: none; transition: background 0.2s; gap: 12px; }}
         .table-header:hover {{ background: {t['bg']}; }}
         .table-title {{ font-size: 15px; font-weight: 600; color: {t['text']}; flex: 1; }}
@@ -540,6 +670,7 @@ class RenderEngine:
         .detail-table tbody tr:hover {{ background: {t['primary'][0]}08; }}
         .detail-table tbody tr:nth-child(even) {{ background: {t['bg']}; }}
 
+        /* 结论区 */
         .conclusion {{ background: {t['card_bg']}; border-radius: 14px; padding: 24px;
                        box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.04);
                        margin-bottom: 20px; }}
@@ -548,11 +679,13 @@ class RenderEngine:
                           background: linear-gradient(180deg, {t['gradient'][0]}, {t['gradient'][1]}); }}
         .conclusion ul {{ list-style: none; }}
         .conclusion li {{ padding: 10px 0; border-bottom: 1px solid {t['border']};
-                         color: {t['text']}; display: flex; align-items: center; gap: 8px; }}
+                         color: {t['text']}; display: flex; align-items: flex-start; gap: 8px; line-height: 1.6; }}
         .conclusion li:last-child {{ border-bottom: none; }}
-        .conclusion li::before {{ content: "✦"; color: {t['primary'][0]}; font-size: 12px; }}
+        .conclusion li::before {{ content: "—"; color: {t['primary'][0]}; font-size: 14px; flex-shrink: 0; }}
+
         @@keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(10px); }} to {{ opacity: 1; transform: translateY(0); }} }}
         .kpi-row {{ animation: fadeIn 0.5s ease-out; }}
+        .section-group {{ animation: fadeIn 0.6s ease-out; }}
         .chart-box {{ animation: fadeIn 0.6s ease-out; }}
         .conclusion {{ animation: fadeIn 0.7s ease-out; }}
     </style>
@@ -567,13 +700,11 @@ class RenderEngine:
         {sections_html}
     </div>
     <script>
-        // 页面加载完成后初始化图表
         document.addEventListener('DOMContentLoaded', function() {{
             setTimeout(function() {{
                 {chart_scripts}
             }}, 100);
         }});
-        // 窗口大小变化时自适应
         var resizeTimer;
         window.addEventListener('resize', function() {{
             clearTimeout(resizeTimer);
@@ -595,17 +726,23 @@ class RenderEngine:
             change_val = m.get("change", 0)
             change_class = "up" if change_val >= 0 else "down"
             change_sign = "+" if change_val >= 0 else ""
+            value = m.get('value', 0)
+            # v3.1：字符串值（如日期/名称）不做千分位格式化，避免 ValueError
+            if isinstance(value, (int, float)):
+                value_str = f"{value:,}"
+            else:
+                value_str = str(value)
             cards += f"""
         <div class="kpi-card" style="animation-delay: {i*0.1}s;">
             <div class="label">{m.get('label', '')}</div>
-            <div class="value">{m.get('value', 0):,}</div>
+            <div class="value">{value_str}</div>
             <div class="change {change_class}">{change_sign}{change_val*100:.1f}% vs 同期</div>
         </div>"""
         return f'<div class="kpi-row">{cards}</div>'
 
     def _render_chart(self, section: Dict) -> tuple:
         """
-        渲染单个图表，返回 (html, script) 元组。
+        渲染单个图表，返回 (html, script) 元组（v3.0 增强：span 跨列 + 数据解读区）。
         使用 ChartBuilder 构建 ECharts option，支持 15+ 图表类型。
         """
         chart_id = f"chart_{abs(hash(json.dumps(section.get('data', {}), sort_keys=True))) % 100000}"
@@ -624,13 +761,28 @@ class RenderEngine:
             "heatmap": "热力图", "sankey": "桑基图", "gauge": "仪表盘",
             "treemap": "树图", "word_cloud": "词云"}
 
+        # v3.0 span 跨列支持（便当盒网格）
+        span = section.get("span", 1)
+        span_attr = f' data-span="{span}"' if span != 1 else ""
+
+        # v3.0 数据解读区（每个图表下方的分析文字）
+        description = section.get("description", "")
+        insight_level = section.get("insight_level", "基础")
+        insight_html = ""
+        if description:
+            insight_html = f"""
+            <div class="chart-insight" data-level="{insight_level}">
+                <span class="insight-tag" data-level="{insight_level}">{insight_level}</span>{description}
+            </div>"""
+
         html = f"""
-        <div class="chart-box" style="animation-delay: {section.get('_delay', 0.2)}s;">
+        <div class="chart-box"{span_attr} style="animation-delay: {section.get('_delay', 0.2)}s;">
             <div class="chart-title">
                 <span>{chart_labels.get(chart_type, '图表')}</span>
                 <span style="font-weight:400;font-size:13px;color:{self.theme['text_secondary']};">{section.get('title', '')}</span>
             </div>
             <div id="{chart_id}" class="chart-container"></div>
+            {insight_html}
         </div>"""
 
         option_json = json.dumps(option, ensure_ascii=False)

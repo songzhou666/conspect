@@ -1,158 +1,169 @@
-# Conspect — 全自动报表渲染引擎
+# Conspect · 数据报表引擎
 
-> 上传 Excel，一句话需求，AI 全自动生成可投屏的专业商务报表。
+> 数据进，报表出。五阶段流水线，38 种报表风格，22 个报表板块。
 
-[![version](https://img.shields.io/badge/version-3.1-blue)](./1-manifest/skill-manifest.yaml)
-[![level](https://img.shields.io/badge/level-L3-success)](./CHANGELOG.md)
-[![license](https://img.shields.io/badge/license-MIT-green)](#许可证)
+![version](https://img.shields.io/badge/version-5.1-blue)
+![styles](https://img.shields.io/badge/styles-38-brightgreen)
+![blocks](https://img.shields.io/badge/blocks-22-orange)
 
 ---
 
-## 这是什么
+## 一句话定位
 
-Conspect 是一个通用的 AI Skill，把"Excel → 开会用的报表"这件事全自动托管给 AI。
+上传数据源，AI 走完 **读取数据 → 分析数据 → 汇报内容选型 → 报表选型 → 生成报表** 五个阶段，
+产出一份既能投屏也能打印的专业报表。前两阶段全自动，两个选型阶段各停一次让你拍板。
 
-- **一句话需求触发**：上传 Excel + "帮我出一份周报看板"
-- **9 阶段全自动推进**：分析 → 洞察生成 → 设计 → 设计审查 → 实现 → 报告生成 → 验证 → 完成
-- **零用户确认环节**（v3.0）：偏好从初始需求自动识别，不再中途打断你
-- **多格式输出**：HTML 看板 / PDF / Markdown / Word，含中文命名副本
+---
 
-## 快速开始
+## 为什么停两次
 
-### 1. 触发方式
+因为它决定报表的**内容**与**外观**，这两件事不该由 AI 替你决定：
 
-```
-/conspect start                 # 启动报表任务
-/conspect start --offline       # 离线模式（内联 ECharts，无需联网）
-/conspect status                # 查看当前进度
-/conspect reset                 # 重置当前任务
-```
+| 确认点 | 你看什么 | 你能做什么 |
+|--------|---------|-----------|
+| 内容确认 | 板块清单（讲哪些内容、剔除了什么、为什么） | 增删板块 / 重新选型 |
+| 风格确认 | 选型卡（风格、配色预览、4 条理由、2 个备选） | 换风格 / 换族重选 |
 
-或直接用自然语言：
+其余环节全自动，不需要你介入。
 
-> "帮我分析这份业务数据，出一份周报看板" + 上传 sales.xlsx
+---
 
-### 2. 在初始需求中说明偏好（可选）
-
-v3.0 起偏好从初始需求自动识别，全程无确认环节：
-
-| 偏好类型 | 示例 |
-|---------|------|
-| 配色 | "用蓝色调"、"我想要暖色系"、"主色调用 #1890FF" |
-| 图表 | "对比多用柱状图"、"占比用饼图" |
-| 输出格式 | "生成 PDF 给我"、"做一个离线 HTML" |
-| 分析焦点 | "重点关注销售趋势"、"按区域分析" |
-
-### 3. 产物位置
-
-所有产物位于 `{项目路径}/.agent/harness/`：
-
-| 文件 | 说明 |
-|------|------|
-| `_cs-dashboard.html` | 交互式 Web 看板 |
-| `_cs-report.md` / `.html` / `.pdf` | 多格式分析报告 |
-| `_cs-analysis.md` | 数据分析报告 |
-| `_cs-insights.json` | AI 洞察与建议 |
-| `_cs-verify.md` | 验证报告 |
-| `数据看板.html` / `分析报告.md` | 中文命名副本 |
-
-## 状态机（9 阶段全自动）
+## 五阶段
 
 ```
-开始 → 分析 → 洞察生成 → 设计 → 设计审查 → 实现 → 报告生成 → 验证 → 完成
+读取数据 ─QA1→ 分析数据 ─QA2→ 汇报内容选型 ⟪确认⟫ ─QA3→ 报表选型 ⟪确认⟫ ─QA4→ 生成报表 ─QA5→ 完成
 ```
 
-每个阶段产出物是下一阶段的前置条件，QA 审核不通过自动回退重做，最多重试 2 次。
+| 阶段 | 做什么 | 产出 |
+|------|--------|------|
+| 读取数据 | 枚举文件与 Sheet、识别列与类型、算质量分、识别偏好 | `_cs-datamap.md` |
+| 分析数据 | 维度指标分析、统计、高级分析、洞察与建议 | `_cs-analysis.md`、`_cs-insights.json` |
+| 汇报内容选型 | 从 22 板块按触发条件组合出报表大纲 | `_cs-content.md` |
+| 报表选型 | 三级加载选风格、声明资产引用、视觉自审 | `_cs-style.md` |
+| 生成报表 | 按板块装配 + 按风格渲染 + 多格式输出 + 内核验 | `_cs-dashboard.html`、`_cs-report.*` |
 
-## 能力边界
+---
 
-### ✅ 擅长
+## 风格资产：38 风格 × 6 族
 
-- 多源 Excel 数据分析与合并
-- 商务报表/看板/数据大屏生成
-- 投屏用 HTML 看板
-- 多格式报告输出（HTML/PDF/MD/Word）
+| 族 | 调性 | 定位场景 | 风格数 |
+|---|---|---|---|
+| 商务通稿 `biz` | 浅色 | 正式汇报 · 年度报告 · 经营分析 · 打印分发 | 7 |
+| 数据大屏 `screen` | 深色 | 会议室投屏 · 监控大屏 · 沉浸演示 · 展会轮播 | 7 |
+| 玻璃光影 `glass` | 混合 | 产品发布 · 品牌质感 · 高端提案 | 6 |
+| 纸感编辑 `editorial` | 浅色 | 深度研究 · 行业洞察 · 阅读型长报告 | 6 |
+| 自然柔和 `organic` | 浅色 | 健康医疗 · 教育科研 · ESG · 亲和型汇报 | 6 |
+| 表达张力 `bold` | 混合 | 创意提案 · 品牌宣言 · 年轻化团队 · 营销复盘 | 6 |
 
-### ❌ 不做
+**三级渐进式加载**，选一次风格只需读约 200 行，不是 38 份全读：
 
-- 简单数据整理（用 Excel 即可）
-- 桌面 BI 工具替代（用 Tableau/Power BI）
-- 纯文本报告（无图表需求时无需 conspect）
-- 实时数据流处理（conspect 处理静态文件）
-
-## CLI 工具层
-
-```powershell
-cd e:/Mytest_skill/.trae/skills/conspect/conspect_tools
-
-# 全链路分析
-python run.py analyze '{"file_paths": ["数据源.xlsx"]}'
-
-# 用户偏好识别（v3.0 新增）
-python run.py recognize_preferences '{"user_requirement": "用蓝色调，出 PDF"}'
-
-# 安全降级洞察生成（v3.0 新增）
-python run.py ai_generate_insights_safe '{"statistics": {...}}'
-
-# 交叉分析
-python run.py cross_tabulate '{"file_paths": [...], "row_dim": "产品", "col_dim": "区域"}'
-
-# 渲染报告
-python run.py render_report '{"report_design": {...}, "format": "html"}'
+```
+L0 assets/catalog/catalog_l0.md   族总览 + 38 风格全景，按调性硬过滤到 ≤3 族
+L1 assets/index/{族}.md           族内判别表，锁定唯一风格
+L2 assets/body/{编号}_{class}.md  唯一 1 份完整创作载荷
 ```
 
-## 项目结构
+`assets/style-system.json` 是**唯一事实源**；上面三份 md 全部由它生成，渲染引擎也从它读 token。
+**源唯一、产物一致，想漂移都漂不了。**
+
+---
+
+## 报表板块：22 板块 × 6 族
+
+| 族 | 板块 |
+|---|---|
+| 开场 | B01 封面页 · B02 执行摘要 · B03 目录导航 |
+| 指标 | B04 KPI 指标墙 · B05 目标达成仪表 · B06 迷你趋势卡 |
+| 分析 | B07 趋势 · B08 结构 · B09 对比排名 · B10 归因 · B11 分布离群 · B12 关联相关 · B13 明细透视 · B14 预测 |
+| 结论 | B15 核心发现 · B16 风险与机会 · B17 行动建议 |
+| 说明 | B18 口径定义 · B19 数据质量 · B20 分析方法论 |
+| 收尾 | B21 附录术语 · B22 结尾下一步 |
+
+**7 个必需板块**无条件出现；其余按触发条件自动纳入——**满足才纳入，不满足不硬塞**。
+
+---
+
+## 目录结构
 
 ```
 conspect/
-├── SKILL.md                    # 主文档（触发契约 + 状态机）
-├── SKILL-execution.md          # 阶段执行手册
-├── README.md                   # 本文件
-├── CHANGELOG.md                # 版本变更记录
-├── 1-manifest/
-│   └── skill-manifest.yaml     # 技能清单
-├── agents/                     # 7 个 Agent 定义
-│   ├── 00-master-controller.md
-│   ├── 01-analyzer-agent.md
-│   ├── 02-designer-agent.md
-│   ├── 03-implementer-agent.md
-│   ├── 04-verifier-agent.md
-│   ├── 05-quality-auditor.md
-│   └── 06-visual-designer-agent.md
-├── protocols/                  # 协议文档
-│   ├── phase-protocol.md       # 阶段流转协议
-│   └── baton-protocol.md       # 接力棒协议
-├── references/                 # 深度参考
-│   ├── trigger-guide.md
-│   ├── examples.md
-│   └── faq-deep.md
-├── SKILL.chunks/               # 分块加载文档
-└── conspect_tools/             # Python 工具层
-    ├── run.py                  # CLI 入口
-    ├── config.py               # 配置（v3.0 稳定性增强）
-    ├── ai_agent.py             # AI Agent（v3.0 异常降级）
-    ├── data_processor.py
-    ├── data_statistics.py
-    ├── render_engine.py
-    └── ...
+├── SKILL.md                    主入口（5 阶段 + 资产路由）
+├── SKILL-execution.md          执行手册（5 章，逐阶段步骤）
+├── assets/                     [资产层]
+│   ├── style-system.json       唯一事实源（38 风格 + 6 族 + token + 板块索引）
+│   ├── catalog/catalog_l0.md   L0 生成物
+│   ├── index/*.md              L1 生成物 ×6
+│   ├── body/*.md               L2 生成物 ×38
+│   └── common/                 板块库 / 兜底骨架 / 配色指南 / 图表规格
+├── tools/                      资产导入、生成与校验脚本
+├── protocols/                  接力棒与阶段流转协议
+├── artifacts/                  产物清单（唯一事实源）与模板
+├── agents/                     7 个 Agent（与 5 阶段对应）
+├── references/                 参考文档
+├── conspect_tools/             引擎（数据/分析/渲染/导出/选型/呈现）
+└── tests/                      260 个单元测试（源码仓库，不进发布包）
 ```
 
-## 技术栈
+---
 
-- **数据层**：pandas + openpyxl
-- **可视化**：ECharts 5
-- **渲染**：Jinja2 模板引擎
-- **导出**：PDF（weasyprint）/ Word（python-docx）
+## 自检
 
-## 版本历史
+```powershell
+cd {技能目录}
 
-详见 [CHANGELOG.md](./CHANGELOG.md)。
+# 资产一致性（字段齐全 / hex 合法 / 对比度 / 生成物同步）
+python tools/check_style_assets.py
 
-- **v3.1**（2026-08-11）：渲染能力升级——分区式看板布局 + 便当盒网格 + 每图表数据解读区 + 8 套商业级配色，修复图表数据标准化与渲染 Bug
-- **v3.0**（2026-08-11）：全流程托管 AI 自动生成，删除确认环节，新增洞察生成和报告生成阶段
-- **v2.0**：9 阶段状态机（含确认环节）
-- **v1.0**：初始版本
+# 文档与产物一致性（引用自检 + 生成物同步）
+python tools/check_refs.py
 
-## 许可证
+# 单元测试
+python -m unittest discover -s tests
+```
 
-MIT
+重建资产（改了 `style-system.json` 之后）：
+
+```powershell
+python tools/gen_style_assets.py
+```
+
+---
+
+## 数据安全
+
+- 解析、分析、渲染全部本地完成，**数据不出本地**
+- 原始明细不上前端，只出聚合与 TopN
+- 不修改用户上传的原始文件
+- 产物中不使用 emoji
+
+---
+
+## 边界
+
+| 能做 | 需要你配合 | 不做 |
+|------|-----------|------|
+| 多源合并分析、自动维度与指标分析、报表生成、38 风格选型、22 板块组织 | 多源关联需声明关联键；同比环比需同期数据；品牌色需提供色值；PDF/Word 需可选依赖 | 桌面 BI 集成、实时数据接入、纯文本报告、原始数据在线编辑 |
+
+---
+
+## 版本
+
+**5.1** — 选型不再只给编号：风格卡带「色系 / 形状 / 气质 / 适合场景 / 不适合」人话描述，
+备选写明与推荐款的差异，并附可看的风格对比页；板块清单带白话用途。
+
+**5.0** — 引入数据契约层：先探测列画像、再由 AI 终判角色、最后固化成 `_cs-schema.json`，
+全链路只按契约计算。判定不再散落在三个模块里靠关键词各猜一套，新行业无需改代码。
+实测 8 行业 59 关键列，纯统计 role 准确率 100%；`additivity`（能否求和）
+统计只判得出 40.9%，其余显式标 hint 交契约终判。
+
+**4.2** — 支持两类此前吃不下的数据：中文日期（如 2025年06月27日 15:27）与无金额度量的
+记录型流水（以「记录数」为指标）；剔除电话号码等标识列被误当指标；排名板块支持多维拆解；
+超出板块容量的图表进「补充图表」区并记缺口，不再静默丢失。
+
+**4.1** — 打通「数据 → 图表 → 板块 → 版面」链路：`analyze` 产出图表候选与数据议题，
+`build_dashboard_layout` 按板块清单真正装配并回报内容缺口；补齐质量评分；
+序列色增加可区分性校验。
+
+**4.0** — 五阶段重划（原 9 阶段）、38 风格资产体系、22 板块内容库、两个确认点。
+
+9→5 阶段映射与完整变更见 [CHANGELOG.md](CHANGELOG.md)。

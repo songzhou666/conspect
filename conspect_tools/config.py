@@ -19,17 +19,20 @@ HARNESS_DIR = PROJECT_ROOT / ".agent" / "harness"
 # 数据配置
 DATA_CONFIG = {
     "max_file_size_mb": 100,
-    "supported_extensions": [".xlsx", ".xls", ".csv"],
+    # 唯一事实源：以 data_processor.SUPPORTED_EXTENSIONS 为准。
+    # .xls（BIFF）openpyxl 无法读取，已移除；.json 未实现，从未支持。
+    "supported_extensions": [".xlsx", ".xlsm", ".csv"],
     "max_sheets": 50,
     "max_rows": 500000,
 }
 
 # 渲染配置
 RENDER_CONFIG = {
-    "theme": "ocean",
+    # 风格编号见 assets/style-system.json（38 风格 / 6 族），留空取默认风格
+    "theme": "",
     "echarts_cdn": "https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js",
     "output_formats": ["html", "pdf", "png"],
-    "fallback_theme": "ocean",  # 主题加载失败时的兜底主题
+    "fallback_theme": "A12",  # 资产不可用时的兜底风格编号（扁平无影）
 }
 
 # 报告配置
@@ -70,7 +73,7 @@ STABILITY_CONFIG = {
     "analysis_timeout_seconds": 300,
     # 降级策略（部分失败时继续流程）
     "enable_fallback": True,
-    "fallback_theme": "ocean",
+    "fallback_theme": "A12",
     "fallback_chart_type": "bar",
     "skip_optional_on_error": True,  # 非关键步骤失败时跳过而非阻断
     # 日志与诊断
@@ -82,7 +85,8 @@ STABILITY_CONFIG = {
 # ===== v3.0 新增：用户偏好默认值（替代原确认环节）=====
 DEFAULT_USER_PREFERENCES = {
     # 配色偏好（识别失败时使用）
-    "color_scheme": "ocean",  # ocean/warm/aurora/forest/minimal
+    # 风格编号（如 "A12"），全部可选值见 assets/catalog/catalog_l0.md
+    "color_scheme": "",
     "custom_primary_color": None,  # 如 "#1890FF"，未指定则用主题色
     # 图表偏好
     "chart_preferences": {
@@ -107,7 +111,7 @@ AUTO_FLOW_CONFIG = {
     # 状态机自动推进（无用户确认节点）
     "auto_advance": True,
     "skip_user_confirmation": True,  # v3.0 核心变更：跳过确认环节
-    "insight_generation_enabled": True,  # 新增洞察生成阶段
+    "insight_generation_enabled": True,  # 分析数据阶段的洞察收尾步骤
     # QA 审核策略（不通过时自动修复，不阻断）
     "qa_auto_fix": True,
     "qa_max_retries": 2,

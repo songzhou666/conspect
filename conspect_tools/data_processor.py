@@ -12,6 +12,23 @@ import openpyxl
 from pathlib import Path
 from typing import List, Dict, Optional, Any, Tuple, Union
 
+# ---------------------------------------------------------------------------
+# 支持的数据源格式（唯一事实源，修改时必须同步 config.py 与 SKILL.md）
+#
+# 事实说明（2026-10-16 实测）：
+#   - openpyxl 只能读取 OOXML（.xlsx / .xlsm），无法读取旧版 .xls（BIFF 格式）。
+#   - .csv 由 pandas 直接读取，自动探测 UTF-8 / GBK 编码。
+#   - .json 未实现，不在支持范围内。
+# ---------------------------------------------------------------------------
+EXCEL_EXTENSIONS = {".xlsx", ".xlsm"}
+CSV_EXTENSIONS = {".csv"}
+SUPPORTED_EXTENSIONS = EXCEL_EXTENSIONS | CSV_EXTENSIONS
+LEGACY_EXCEL_EXTENSIONS = {".xls"}
+
+
+class UnsupportedFormatError(ValueError):
+    """数据源格式不受支持时抛出，替代底层晦涩的 BadZipFile 报错。"""
+
 
 class DataProcessor:
     """Excel数据处理核心类"""
@@ -22,32 +39,71 @@ class DataProcessor:
 
     def load_excel(self, file_paths: List[str]) -> Dict[str, pd.DataFrame]:
         """
-        加载多个Excel文件，读取所有Sheet的所有数据。
+        加载多个数据源文件，读取其中全部数据。
 
-        使用 openpyxl 引擎读取，保留原始列名和行顺序。
+        按后缀分派：
+          - .xlsx / .xlsm → openpyxl 引擎，遍历所有 Sheet
+          - .csv          → pandas 直接读取（自动探测 utf-8 / gbk 编码）
+          - .xls          → 抛出 UnsupportedFormatError（openpyxl 不支持 BIFF，请另存为 .xlsx）
+          - 其他          → 抛出 UnsupportedFormatError
+
         不做任何清洗或转换——仅读取原始数据。
-        数值列可能被 pandas 推断为 int64/float64，日期列推断为 datetime64，
-        文本列保持为 object 类型。
 
         参数:
-            file_paths: Excel文件路径列表
+            file_paths: 数据源文件路径列表
         返回:
-            {文件名_Sheet名: DataFrame} 字典，包含所有文件的所有Sheet
+            {文件名_Sheet名: DataFrame} 字典（CSV 的 key 为文件名）
         """
         result = {}
         for fp in file_paths:
             path = Path(fp)
             if not path.exists():
                 continue
-            # 显式使用 openpyxl 引擎读取所有Sheet
-            excel_file = pd.ExcelFile(path, engine='openpyxl')
-            for sheet_name in excel_file.sheet_names:
-                key = f"{path.stem}_{sheet_name}"
-                # parse 不改变原始列名和行顺序，保留各列原始类型
-                df = excel_file.parse(sheet_name)
+
+            suffix = path.suffix.lower()
+
+            if suffix in EXCEL_EXTENSIONS:
+                # 显式使用 openpyxl 引擎读取所有Sheet
+                excel_file = pd.ExcelFile(path, engine="openpyxl")
+                for sheet_name in excel_file.sheet_names:
+                    key = f"{path.stem}_{sheet_name}"
+                    # parse 不改变原始列名和行顺序，保留各列原始类型
+                    df = excel_file.parse(sheet_name)
+                    result[key] = df
+                    self.dataframes[key] = df
+
+            elif suffix in CSV_EXTENSIONS:
+                key = path.stem
+                df = self._read_csv(path)
                 result[key] = df
                 self.dataframes[key] = df
+
+            elif suffix in LEGACY_EXCEL_EXTENSIONS:
+                raise UnsupportedFormatError(
+                    f"不支持旧版 Excel 格式 .xls：{path.name}。"
+                    "openpyxl 无法读取 BIFF 格式，请用 Excel/WPS 另存为 .xlsx 后重试。"
+                )
+
+            else:
+                raise UnsupportedFormatError(
+                    f"不支持的文件格式「{suffix or '(无后缀)'}」：{path.name}。"
+                    f"当前支持：{', '.join(sorted(SUPPORTED_EXTENSIONS))}。"
+                )
+
         return result
+
+    @staticmethod
+    def _read_csv(path: Path) -> pd.DataFrame:
+        """读取 CSV，依次尝试 utf-8-sig / gbk / utf-8 编码。"""
+        last_error: Optional[Exception] = None
+        for encoding in ("utf-8-sig", "gbk", "utf-8"):
+            try:
+                return pd.read_csv(path, encoding=encoding)
+            except UnicodeDecodeError as exc:
+                last_error = exc
+        raise UnsupportedFormatError(
+            f"无法解码 CSV 文件 {path.name}（已尝试 utf-8-sig / gbk / utf-8）：{last_error}"
+        )
 
     def read_all_sheets_raw(self, file_paths: List[str]) -> Dict[str, Dict[str, Any]]:
         """
@@ -72,6 +128,44 @@ class DataProcessor:
             path = Path(fp)
             if not path.exists():
                 continue
+
+            suffix = path.suffix.lower()
+
+            if suffix in CSV_EXTENSIONS:
+                df = self._read_csv(path)
+                key = path.stem
+                column_dtypes = {}
+                for col in df.columns:
+                    types = {type(v).__name__ for v in df[col].dropna().tolist()}
+                    column_dtypes[str(col)] = sorted(types) if types else ["NoneType"]
+                sample_data = []
+                for row in df.head(3).to_dict(orient="records"):
+                    sample_data.append({
+                        str(k): (str(v) if isinstance(v, pd.Timestamp) else (None if pd.isna(v) else v))
+                        for k, v in row.items()
+                    })
+                result[key] = {
+                    "sheet_name": key,
+                    "rows": int(df.shape[0]),
+                    "columns": int(df.shape[1]),
+                    "column_names": [str(c) for c in df.columns],
+                    "column_dtypes": column_dtypes,
+                    "sample_data": sample_data,
+                }
+                continue
+
+            if suffix in LEGACY_EXCEL_EXTENSIONS:
+                raise UnsupportedFormatError(
+                    f"不支持旧版 Excel 格式 .xls：{path.name}。"
+                    "openpyxl 无法读取 BIFF 格式，请用 Excel/WPS 另存为 .xlsx 后重试。"
+                )
+
+            if suffix not in EXCEL_EXTENSIONS:
+                raise UnsupportedFormatError(
+                    f"不支持的文件格式「{suffix or '(无后缀)'}」：{path.name}。"
+                    f"当前支持：{', '.join(sorted(SUPPORTED_EXTENSIONS))}。"
+                )
+
             wb = openpyxl.load_workbook(path, data_only=True)
             for sheet_name in wb.sheetnames:
                 ws = wb[sheet_name]
@@ -199,22 +293,50 @@ class DataProcessor:
         }
         return df_clean, info
 
-    def identify_dimensions(self, df: pd.DataFrame) -> Dict[str, List[str]]:
+    def identify_dimensions(self, df: pd.DataFrame,
+                            contract: Optional[Dict] = None) -> Dict[str, List[str]]:
         """
-        自动识别数据维度。
+        识别数据维度，返回 {"时间": [...], "分类": [...], "数值": [...]}。
 
-        识别策略（优先级从高到低）：
-          1. datetime64 类型 → "时间" 维度
-          2. 数值类型 (int64/float64) → "数值" 维度
-          3. object 类型 → 先通过关键词匹配检查是否为时间相关，否则归为"分类"
-          4. 关键词辅助匹配覆盖其他特殊情况
+        **优先走契约**（v5.0）：传入 `contract` 时直接按其 role 映射，
+        计算链路不再自行猜测；未传入时才退化到统计启发式。
 
-        关键词列表覆盖常见的行业通用词，但不再作为唯一判断依据。
+        为什么要有两条路径：
+          契约（探测 + AI/人工终判）能正确处理「电话号码不是指标」「客户名称是维度
+          而不是明细ID」这类统计上无法区分的情况，且判定结果可审计。
+          但契约需要先跑一次 probe，纯自动场景下仍要能跑通，所以保留启发式兜底。
 
+        启发式路径的能力边界（已在 schema_probe 里诚实标注）：
+          关键词表只能覆盖常见术语，新行业的新词（客单价、GMV、到店人次）会漏，
+          所以它只是兜底，不是主路径；输出带 `_provenance` 标记便于追责。
+
+        参数:
+            df: 数据表
+            contract: schema_contract.build() 产出的契约（可选）
         返回:
-            {"时间": [字段列表], "分类": [字段列表], "数值": [字段列表]}
+            {"时间": [...], "分类": [...], "数值": [...]}
+            （走契约时额外带 "_provenance" 键，标明来源）
         """
+        if contract:
+            from conspect_tools import schema_contract
+            dims = schema_contract.to_dimensions(contract)
+            dims["_provenance"] = {
+                # 区分「用户提供的契约」与「未提供时现场探测生成的契约」：
+                # 两者都按契约执行，但可信度不同，报表口径需要据此声明。
+                "source": ("auto_contract" if contract.get("_auto_generated")
+                           else "contract"),
+                "decided_by": contract.get("decided_by", "unknown"),
+                "excluded": {
+                    "identifier": contract.get("views", {}).get("identifier", []),
+                    "text": contract.get("views", {}).get("text", []),
+                    "ignore": contract.get("views", {}).get("ignore", []),
+                    "unknown": contract.get("views", {}).get("unknown", []),
+                },
+            }
+            return dims
+
         dimensions = {"时间": [], "分类": [], "数值": []}
+        dimensions["_provenance"] = {"source": "heuristic"}
 
         # 行业通用的时间关键词
         date_keywords = [
@@ -325,6 +447,52 @@ class DataProcessor:
                 result["insights"].append(f"{top_metric}总计: {total_val:,.2f}")
                 result["insights"].append(f"{top_metric}有效记录数: {count_val}")
 
+        return result
+
+    def assess_quality(self, file_paths: List[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        评估各 Sheet 的数据质量分（0–100）。
+
+        为什么需要这一层：`read_datamap` 要给出「质量分」，但底层此前没有对应方法，
+        导致质量分恒为 None——选型阶段因此拿不到「数据是否可信」的信号。
+
+        评分方式：
+          每列完整度 = 1 − 缺失率；数值列权重 1.5（缺失直接影响合计口径），
+          其余列权重 1.0；加权平均后折算为百分制。
+
+        参数:
+            file_paths: 数据文件路径列表
+        返回:
+            {sheet_key: {"score": float, "row_count": int, "column_count": int,
+                         "worst_columns": [...]}}
+        """
+        result: Dict[str, Dict[str, Any]] = {}
+        dfs = self.load_excel(file_paths)
+        for key, df in dfs.items():
+            if df.empty or df.shape[1] == 0:
+                result[key] = {"score": 0.0, "row_count": 0, "column_count": 0,
+                               "worst_columns": []}
+                continue
+            total_w = 0.0
+            acc = 0.0
+            worst = []
+            for col in df.columns:
+                null_rate = float(df[col].isna().mean())
+                is_num = pd.api.types.is_numeric_dtype(df[col])
+                w = 1.5 if is_num else 1.0
+                acc += (1 - null_rate) * w
+                total_w += w
+                if null_rate > 0:
+                    worst.append({"column": str(col),
+                                  "null_rate": round(null_rate, 4)})
+            score = round(100 * acc / total_w, 1) if total_w else 0.0
+            worst.sort(key=lambda x: -x["null_rate"])
+            result[key] = {
+                "score": score,
+                "row_count": int(len(df)),
+                "column_count": int(df.shape[1]),
+                "worst_columns": worst[:5],
+            }
         return result
 
     def calculate_comparison(self, current: float, previous: float) -> Dict[str, float]:

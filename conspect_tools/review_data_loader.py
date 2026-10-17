@@ -32,17 +32,22 @@ class ReviewDataLoader:
         self.project_root = Path(project_root) if project_root else Path.cwd()
     
     def load_json(self, filepath: str) -> Dict:
-        """加载 JSON 文件"""
+        """加载 JSON 文件。路径为空、不存在或不是文件时返回 {}，不抛异常。"""
+        if not filepath:
+            return {}
         path = self.project_root / filepath
-        if not path.exists():
+        # 用 is_file 而非 exists：空路径会解析为目录，exists() 为真但 open() 会 PermissionError
+        if not path.is_file():
             return {}
         with open(path, 'r', encoding='utf-8') as f:
             return json.load(f)
-    
+
     def load_text(self, filepath: str) -> str:
-        """加载文本文件"""
+        """加载文本文件。路径为空、不存在或不是文件时返回空串，不抛异常。"""
+        if not filepath:
+            return ""
         path = self.project_root / filepath
-        if not path.exists():
+        if not path.is_file():
             return ""
         with open(path, 'r', encoding='utf-8') as f:
             return f.read()

@@ -1,0 +1,231 @@
+# conspect 产物清单 —— 唯一事实源（v4.0）
+#
+# 本文件是 conspect 所有产物的权威定义。SKILL.md / SKILL-execution.md /
+# protocols/baton-protocol.md / artifacts/template-artifacts.md 一律引用本文件，
+# 不得各自重写一份清单（历史上四份清单互相矛盾，是漂移的根源）。
+#
+# v4.0 变更：阶段由 9 个重划为 5 个；产物由 23 项收敛为 21 项；
+#            新增 _cs-datamap / _cs-content / _cs-style / _cs-render；
+#            删除 _cs-design / _cs-design-review / _cs-implement /
+#                 _cs-export.png 及对应 QA 报告。
+#
+# 字段说明：
+#   name        产物文件名（相对 {项目路径}/.agent/harness/）
+#   stage       产出阶段（5 阶段中文名 / 完成 / 任一）
+#   required    是否必需：true = 缺失即阻断；false = 可选/条件生成
+#   confirm     true = 该产物需用户确认后才可推进（仅两个选型阶段）
+#   template    模板位置（template-artifacts.md 中的章节号，无模板则 null）
+#   alias       中文命名副本（null 表示不生成）
+#   note        备注
+#
+# 校验方式：python tools/check_refs.py
+
+version: 4.0
+harness_dir: "{项目路径}/.agent/harness/"
+
+artifacts:
+
+  # ---------- 读取数据 ----------
+  - name: _cs-baton.md
+    stage: 读取数据
+    required: true
+    confirm: false
+    template: null
+    alias: null
+    note: 接力棒，全流程持续更新；格式见 protocols/baton-protocol.md
+
+  - name: _cs-datamap.md
+    stage: 读取数据
+    required: true
+    confirm: false
+    template: "一"
+    alias: null
+    note: 数据源清单（文件/Sheet/列名与类型/样本/质量分/契约摘要/可用维度）
+
+  - name: _cs-schema.json
+    stage: 读取数据
+    required: true
+    confirm: false
+    template: null
+    alias: null
+    note: 数据契约（每列角色 time/dimension/measure/identifier/text/ignore/unknown +
+      可加总性）。全链路判定的唯一事实源，后续 analyze 必须传 schema_file
+
+  - name: _cs-qa-read.md
+    stage: 读取数据
+    required: true
+    confirm: false
+    template: "八"
+    alias: null
+    note: 读取数据阶段质量审核
+
+  # ---------- 分析数据 ----------
+  - name: _cs-analysis.md
+    stage: 分析数据
+    required: true
+    confirm: false
+    template: "二"
+    alias: null
+    note: 数据分析结果（维度/指标/统计/高级分析）
+
+  - name: _cs-insights.json
+    stage: 分析数据
+    required: true
+    confirm: false
+    template: null
+    alias: null
+    note: 结构化洞察与建议数据（分析阶段的收尾步骤产出）
+
+  - name: _cs-qa-analyze.md
+    stage: 分析数据
+    required: true
+    confirm: false
+    template: "八"
+    alias: null
+    note: 分析数据阶段质量审核
+
+  # ---------- 汇报内容选型 ----------
+  - name: _cs-content.md
+    stage: 汇报内容选型
+    required: true
+    confirm: true
+    template: "三"
+    alias: null
+    note: 板块组合方案（报表大纲）；须用户确认后才可进入报表选型
+
+  - name: _cs-qa-content.md
+    stage: 汇报内容选型
+    required: true
+    confirm: false
+    template: "八"
+    alias: null
+    note: 汇报内容选型阶段质量审核
+
+  # ---------- 报表选型 ----------
+  - name: _cs-style.md
+    stage: 报表选型
+    required: true
+    confirm: true
+    template: "四"
+    alias: null
+    note: 风格选型卡 + 资产引用声明 + 视觉合规自审；须用户确认后才可生成
+
+  - name: _cs-qa-style.md
+    stage: 报表选型
+    required: true
+    confirm: false
+    template: "八"
+    alias: null
+    note: 报表选型阶段质量审核
+
+  # ---------- 生成报表 ----------
+  - name: _cs-render.md
+    stage: 生成报表
+    required: true
+    confirm: false
+    template: "五"
+    alias: null
+    note: 渲染摘要（板块装配情况/产物路径/降级说明）
+
+  - name: _cs-dashboard.html
+    stage: 生成报表
+    required: true
+    confirm: false
+    template: null
+    alias: 数据看板.html
+    note: 交互式报表看板，投屏首选；由 render_dashboard 渲染
+
+  - name: _cs-report.md
+    stage: 生成报表
+    required: true
+    confirm: false
+    template: "六"
+    alias: 分析报告.md
+    note: 分析报告 Markdown
+
+  - name: _cs-report.html
+    stage: 生成报表
+    required: true
+    confirm: false
+    template: null
+    alias: null
+    note: 分析报告 HTML
+
+  - name: _cs-report.pdf
+    stage: 生成报表
+    required: false
+    confirm: false
+    template: null
+    alias: null
+    note: 分析报告 PDF（需 playwright，缺失则跳过）
+
+  - name: _cs-report.docx
+    stage: 生成报表
+    required: false
+    confirm: false
+    template: null
+    alias: null
+    note: 分析报告 Word（需 python-docx，缺失则跳过）
+
+  - name: _cs-index.json
+    stage: 生成报表
+    required: true
+    confirm: false
+    template: null
+    alias: null
+    note: 看板与报告的关联索引
+
+  - name: _cs-verify.md
+    stage: 生成报表
+    required: true
+    confirm: false
+    template: "七"
+    alias: null
+    note: 内核验回路报告（数据一致性/渲染完整性/资产一致性/商务合规）
+
+  - name: _cs-qa-render.md
+    stage: 生成报表
+    required: true
+    confirm: false
+    template: "八"
+    alias: null
+    note: 生成报表阶段质量审核
+
+  # ---------- 完成 ----------
+  - name: _cs-final-report.md
+    stage: 完成
+    required: true
+    confirm: false
+    template: "九"
+    alias: null
+    note: 最终汇总报告（注意：与 _cs-report.md 是两个不同产物，不得互相覆盖）
+
+  # ---------- 条件产物 ----------
+  - name: _cs-qa-blocked.md
+    stage: 任一
+    required: false
+    confirm: false
+    template: null
+    alias: null
+    note: 质量审核触发 P0 阻断时生成，含阻断原因与修复指引
+
+chinese_alias_rule:
+  description: 最终交付物生成中文命名副本，方便用户在目录里直接辨认
+  generated_by: "CLI 动作 save_with_chinese_name"
+  pairs:
+    _cs-dashboard.html: 数据看板.html
+    _cs-report.md: 分析报告.md
+
+confirm_points:
+  description: 两个强制确认点，未确认不得推进
+  points:
+    - artifact: _cs-content.md
+      stage: 汇报内容选型
+      options: "① 按此生成 ② 增删板块 ③ 重新选型"
+    - artifact: _cs-style.md
+      stage: 报表选型
+      options: "① 就用推荐 ② 换风格（指定编号） ③ 换族重选"
+
+naming_rule:
+  prefix: "_cs-"
+  purpose: 与 ReqPlan-v3 的 _baton.md / _analysis.md 等产物在同一 .agent/harness/ 目录下共存而不冲突

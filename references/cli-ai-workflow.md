@@ -1,152 +1,116 @@
-# CLI 和 AI Agent 调用顺序
+# CLI 与 AI 的分工与调用顺序
 
-> 文档定义 conspect Skill 中 CLI 工具层和 AI Agent 的分工，以及各阶段的调用顺序。
-
----
-
-## 一、CLI 与 AI 分工
-
-### CLI 工具层（数据支持）
-
-**职责**：只负责数据加载、简单计算、文件操作
-
-**模块**：
-- `data_processor.py` - 数据加载、清洗、聚合
-- `data_feature_extractor.py` - 数据特征提取
-- `data_statistics.py` - 数据统计
-- `review_data_loader.py` - 审核数据加载
-- `exporter.py` - 文件导出
-
-**CLI 命令**：
-```bash
-# 数据加载
-python run.py load '{"file_paths": ["数据源文件.xlsx"]}'
-python run.py read_all '{"file_paths": ["数据源文件.xlsx"]}'
-python run.py analyze '{"file_paths": ["数据源文件.xlsx"]}'
-
-# 数据特征提取
-python run.py extract_features '{"data": {...}}'
-
-# 数据统计
-python run.py calc_statistics '{"values": [...]}'
-
-# 审核数据加载
-python run.py load_review_context '{"raw_data_file": "...", "analysis_file": "..."}'
-
-# 数据比较
-python run.py compare_data '{"data1": {...}, "data2": {...}}'
-
-# 文件导出
-python run.py save_report '{"content": "...", "filename": "report.md"}'
-python run.py save_with_chinese_name '{"content": "...", "filename": "report.md"}'
-```
-
-### AI Agent（决策分析）
-
-**职责**：负责所有需要理解和判断的工作
-
-**模块**：
-- `ai_agent.py` - AI Agent（图表选型、洞察生成、质量审核）
-
-**CLI 命令**：
-```bash
-# AI Agent 图表选型决策
-python run.py ai_decide_chart '{"features": {...}, "business_context": "<根据数据源自动识别的业务场景>"}'
-
-# AI Agent 生成洞察
-python run.py ai_generate_insights '{"statistics": {...}, "business_context": "<根据数据源自动识别的业务场景>"}'
-
-# AI Agent 审核
-python run.py ai_review_design '{"analysis": {...}, "design": {...}}'
-python run.py ai_review_implement '{"design": {...}, "implement": {...}}'
-```
+> 一句话原则：**CLI 负责算，AI 负责判断**。CLI 不写结论，AI 不写分析代码。
 
 ---
 
-## 二、各阶段调用顺序
+## 一、分工边界
 
-### 分析阶段
-```
-1. 主控 Agent 调用 CLI 加载数据
-   python run.py load '{"file_paths": ["数据源文件.xlsx"]}'
-   
-2. 主控 Agent 分析数据
-   - 数据清洗、维度识别、指标计算
-   
-3. 主控 Agent 生成分析报告
-   写入 _cs-analysis.md
-   
-4. 主控 Agent 拉起 AI 审核 Agent 审核分析结果
-   → 审核通过 → 进入下一阶段
-   → 审核不通过 → 修复后重新审核
-```
+| 层 | 负责 | 不负责 |
+|----|------|--------|
+| CLI（`conspect_tools/`） | 数据加载、清洗、聚合、统计、特征提取、图表配置生成、HTML 渲染、落盘、导出 | 业务判断、结论撰写、风格选择、板块取舍 |
+| AI Agent | 数据解读、洞察与建议、板块选型、风格选型、质量审核 | 手写分析代码、手写 HTML、绕过 CLI 直接操作文件 |
 
-### 洞察生成阶段
-```
-1. 主控 Agent 调用 CLI 提取数据特征
-   python run.py extract_features '{"data": {...}}'
-   
-2. 主控 Agent 调用 CLI 计算统计数据
-   python run.py calc_statistics '{"values": [...]}'
-   
-3. 主控 Agent 调用 AI Agent 生成洞察
-   - 输入：统计数据 + 业务场景
-   - 输出：洞察列表 + 建议列表
-   
-4. 主控 Agent 写入洞察数据
-   写入 _cs-insights.json
-```
+**唯一例外**：AI 可以写 `.md` / `.json` 形式的**产物文件**（分析报告、板块方案、选型卡），
+但报表产物（HTML / PDF / Word）必须由 CLI 渲染。
 
-### 设计阶段
-```
-1. 主控 Agent 读取分析报告
-   读取 _cs-analysis.md
-   
-2. 主控 Agent 调用 CLI 提取数据特征
-   python run.py extract_features '{"data": {...}}'
-   
-3. 主控 Agent 调用 AI Agent 图表选型决策
-   - 输入：数据特征 + 业务场景
-   - 输出：图表类型 + 选择理由
-   
-4. 主控 Agent 生成设计文档
-   写入 _cs-design.md
-   
-5. 主控 Agent 拉起 AI 审核 Agent 审核设计结果
-   → 审核通过 → 进入下一阶段
-   → 审核不通过 → 修复后重新审核
+---
+
+## 二、模块职责
+
+| 模块 | 职责 |
+|------|------|
+| `data_processor.py` | 加载 Excel/CSV、格式分派、Sheet 枚举、清洗、维度识别 |
+| `data_statistics.py` | 统计计算（集中度、熵、相关性、分布） |
+| `data_feature_extractor.py` | 数据特征提取（供图表选型与板块判定） |
+| `ai_agent.py` | 图表选型决策、洞察与建议、**板块选型**、**风格选型**、审核判定 |
+| `style_loader.py` | 读取风格资产、翻译成主题字典、提供序列色 |
+| `block_library.py` | 解析板块库、执行触发判定、板块裁剪 |
+| `render_engine.py` | 组装 HTML（kpi_cards / section_group / chart / table / conclusion / prose） |
+| `report_renderer.py` | 报告 Markdown / HTML / PDF / Word 渲染 |
+| `exporter.py` | 落盘、中文副本、索引 |
+| `review_data_loader.py` | 审核所需数据的加载与对账 |
+
+---
+
+## 三、五阶段的调用顺序
+
+### 1. 读取数据
+
+```powershell
+'{"file_paths": ["e:/data/sales.xlsx"]}' | python run.py read_datamap
+'{"requirements": "投屏用的深色科技感周报"}' | python run.py recognize_preferences
 ```
 
-### 实现阶段
-```
-1. 主控 Agent 读取设计文档
-   读取 _cs-design.md
-   
-2. 主控 Agent 渲染看板
-   生成 Web 看板 HTML
-   
-3. 主控 Agent 生成实现摘要
-   写入 _cs-implement.md
-   
-4. 主控 Agent 拉起 AI 审核 Agent 审核实现结果
-   → 审核通过 → 进入下一阶段
-   → 审核不通过 → 修复后重新审核
+产出：文件/Sheet/列清单、质量分、风格候选。
+
+### 2. 分析数据
+
+```powershell
+'{"file_paths": ["e:/data/sales.xlsx"]}' | python run.py analyze
+'{"file_paths": ["e:/data/sales.xlsx"]}' | python run.py extract_features
+'{"values": [1,2,3]}' | python run.py calc_statistics
+'{"analysis": {...}}' | python run.py ai_generate_insights
 ```
 
-### 报告生成阶段
+产出：分析结果、数据特征、统计数据、洞察。特征字典要留到下一步。
+
+### 3. 汇报内容选型
+
+```powershell
+# 核对板块库
+python run.py list_blocks
+
+# 生成板块组合（features 用上一步的产出）
+'{"analysis": {...}, "features": {...}, "report_form": "投屏"}' | python run.py select_content
+
+# 为图表驱动板块定图表类型
+'{"features": {...}, "business_context": "经营周报"}' | python run.py ai_decide_chart
 ```
-1. 主控 Agent 读取洞察数据
-   读取 _cs-insights.json
-   
-2. 主控 Agent 设计报告结构
-   生成报告大纲
-   
-3. 主控 Agent 渲染多格式报告
-   - Markdown、HTML、PDF、Word
-   
-4. 主控 Agent 生成中文命名副本
-   python run.py save_with_chinese_name '{...}'
-   
-5. 主控 Agent 写入关联索引
-   写入 _cs-index.json
+
+产出：板块清单 + 裁出清单 → 写 `_cs-content.md` → **等用户确认**。
+
+### 4. 报表选型
+
+```powershell
+# 列出 6 族 38 风格（用于核对 L0 目录）
+python run.py list_styles
+
+# 打分产建议卡
+'{"profile": {"tone": "浅色", "report_type": "经营分析", "density": "高"}}' | python run.py select_style
 ```
+
+产出：选型卡 + 资产引用声明 → 写 `_cs-style.md` → **等用户确认**。
+
+### 5. 生成报表
+
+```powershell
+# 装配布局（blocks 来自已确认的板块清单，顺序即页序）
+'{"analysis": {...}, "insights": [...], "blocks": ["B01","B02","B04","B07"]}' | python run.py build_dashboard_layout
+
+# 渲染（theme 传已确认的风格编号）
+'{"layout": {...}, "theme": "A12"}' | python run.py render_dashboard
+
+# 落盘（长文本必须用 content_file）
+'{"content_file": "_content.html", "filename": "_cs-dashboard.html"}' | python run.py save_report
+'{"content_file": "_content.md", "filename": "_cs-report.md"}' | python run.py save_with_chinese_name
+'{"index": {...}}' | python run.py save_index
+```
+
+产出：看板 HTML、报告多格式、中文副本、索引、内核验报告。
+
+---
+
+## 四、错误处理约定
+
+| CLI 返回 | 含义 | AI 应做 |
+|---------|------|--------|
+| `{"status":"ok", ...}` | 成功 | 继续 |
+| `{"status":"error","message":"文件不存在"}` | 路径问题 | 请用户确认路径，不自行搜索磁盘 |
+| `{"status":"error","message":"未读取到任何 Sheet"}` | 文件为空或结构异常 | 请用户检查文件 |
+| `{"status":"error","message":"格式不支持"}` | `.xls` / `.json` | 提示另存为 `.xlsx` |
+| `{"status":"error","message":"Unknown action"}` | 动作名拼错 | 查 `references/cli-usage.md` 的动作表 |
+| 选了不存在的风格编号 | `style_loader` 回退默认风格 | 检查 `list_styles` 输出，不要凭记忆编号 |
+
+**不要用 `python -c` 绕过**：Windows PowerShell 的引号嵌套会让内联脚本失败，
+且内联代码跳过了工具层的异常降级与路径校验。

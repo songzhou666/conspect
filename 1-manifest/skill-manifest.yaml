@@ -1,14 +1,36 @@
----
 name: conspect
-version: 3.1
+version: 5.1
 author: AI
-display_name: Conspect 全自动报表渲染引擎
-description: 全自动多源数据智能分析与商务报表渲染工具。上传Excel数据源，AI自动完成数据解析、图表选型、商务排版、可视化渲染，输出可直接开会投屏的专业报表。v3.1 全流程托管AI自动生成，零用户确认环节，端到端稳定丝滑。适用场景：生成报表/数据看板/Excel出图/投屏数据/多表合并分析。不适用：简单数据整理/桌面BI工具/纯文本报告。
+display_name: Conspect 数据报表引擎
+description: 多源数据智能分析与专业报表生成工具。上传 Excel/CSV 数据源，AI 走「读取数据 → 分析数据 → 汇报内容选型 → 报表选型 → 生成报表」五阶段流程：先摸清数据、再算出结论、再定「讲什么」、再定「长什么样」、最后出报表。内置 38 种报表风格资产（6 族）与 22 个报表板块，两个选型环节各有一次用户确认。适用场景：经营分析、周报月报、数据看板、投屏报表、多表合并分析、Excel 出图。不适用：桌面 BI 集成、实时数据接入、纯文本报告、原始数据在线编辑。
 language: zh-CN
 tags:
   - 数据分析
   - 报表生成
   - 数据可视化
+  - 风格资产
   - ECharts
-  - 自动化
   - 全流程托管
+
+assets:
+  style_system: assets/style-system.json
+  style_count: 38
+  family_count: 6
+  block_count: 22
+  catalog: assets/catalog/catalog_l0.md
+  load_protocol: "L0 目录 → L1 族索引 → L2 单份正文"
+
+phases:
+  - 读取数据
+  - 分析数据
+  - 汇报内容选型
+  - 报表选型
+  - 生成报表
+confirm_points:
+  - _cs-content.md
+  - _cs-style.md
+
+checks:
+  style_assets: python tools/check_style_assets.py
+  refs: python tools/check_refs.py
+  tests: python -m unittest discover -s tests

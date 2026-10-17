@@ -17,17 +17,17 @@ class ReportRenderer:
     将报告设计渲染为多种格式输出
     
     使用示例:
-        renderer = ReportRenderer(theme_name="ocean")
+        renderer = ReportRenderer(theme_name="A12")
         markdown = renderer.render_markdown(report_design)
         html = renderer.render_html(report_design)
     """
     
-    def __init__(self, theme_name: str = "ocean"):
+    def __init__(self, theme_name: str = ""):
         """
         初始化报告渲染引擎
         
         参数:
-            theme_name: 配色主题名称
+            theme_name: 风格编号（如 "A12"），留空取资产库默认风格
         """
         # 延迟导入，避免循环依赖
         from .render_engine import ColorTheme

@@ -26,7 +26,7 @@
     "analysis_file": "path/to/_cs-analysis.md"
   },
   "business_context": "<根据数据源自动识别的业务场景>",
-  "output_file": "path/to/_cs-ai-review-analysis.md"
+  "output_file": "path/to/_cs-qa-analysis.md"
 }
 ```
 
@@ -40,7 +40,7 @@
   "passed": true,
   "score": 85.0,
   "issues": [],
-  "report_file": "path/to/_cs-ai-review-analysis.md"
+  "report_file": "path/to/_cs-qa-analysis.md"
 }
 ```
 

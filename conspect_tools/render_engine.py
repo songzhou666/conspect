@@ -1,102 +1,150 @@
 """
-vision_tools 渲染引擎模块
-生成 ECharts HTML 看板，支持多种图表类型、多配色主题、丝滑动画交互
+conspect 渲染引擎模块
+生成 ECharts HTML 报表，支持多种图表类型、多风格资产、丝滑动画交互
 
-不限制AI发挥——只要传入正确的 layout 配置，渲染引擎就能输出对应图表。
-视觉设计师 Agent 负责把控"好看"，本引擎负责"能用"。
+风格全部来自资产层（assets/style-system.json），本引擎不持有任何硬编码配色。
+视觉规范由「报表选型」阶段命中的风格资产决定，本引擎负责按资产把内容渲染出来。
 """
 from typing import Dict, List, Optional, Any
 import json
+from pathlib import Path
+
+try:
+    from conspect_tools import style_loader
+except ImportError:  # 允许以包内相对方式导入
+    from . import style_loader
+
+#: 本地 ECharts 路径。存在时内联进 HTML，使报表**离线可用**
+#: （投屏演示、邮件发送、内网打开的常见场景，靠 CDN 会直接白板）。
+ECHARTS_LOCAL = Path(__file__).resolve().parent.parent / "assets" / "vendor" / "echarts.min.js"
+ECHARTS_CDN = "https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"
+_echarts_cache: Optional[str] = None
+
+
+def _lum(hex_color: str) -> float:
+    """相对亮度（WCAG 定义）。"""
+    h = hex_color.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    try:
+        r, g, b = (int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+    except (ValueError, IndexError):
+        return 0.0
+
+    def f(c: float) -> float:
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+
+
+def _contrast(a: str, b: str) -> float:
+    l1, l2 = _lum(a), _lum(b)
+    if l1 < l2:
+        l1, l2 = l2, l1
+    return (l1 + 0.05) / (l2 + 0.05)
+
+
+def _readable(fg: str, bg: str, min_ratio: float = 4.5) -> str:
+    """
+    把前景色朝黑（浅背景）或白（深背景）方向逐步调整，直到与背景对比度达标。
+
+    用途：资产的次要文字色是为版式留白设计的，直接拿来画 12px 轴刻度会看不清。
+    不修改资产，只在渲染时按背景算一个达标的替代色。
+    """
+    if not fg.startswith("#") or not bg.startswith("#"):
+        return fg
+    if _contrast(fg, bg) >= min_ratio:
+        return fg
+    h = fg.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    try:
+        rgb = [int(h[i:i + 2], 16) for i in (0, 2, 4)]
+    except (ValueError, IndexError):
+        return fg
+    # 浅背景压暗，深背景提亮
+    target = 0 if _lum(bg) > 0.5 else 255
+    best = fg
+    for step in range(1, 21):
+        k = step / 20
+        mixed = [round(c + (target - c) * k) for c in rgb]
+        cand = "#{:02X}{:02X}{:02X}".format(*mixed)
+        best = cand
+        if _contrast(cand, bg) >= min_ratio:
+            return cand
+    return best
+
+
+def echarts_script_tag(inline: bool = True) -> str:
+    """
+    产出 ECharts 的 script 标签。
+
+    优先内联本地文件（约 1MB，换来离线可用）；本地缺失时退回 CDN。
+    结果缓存，避免每次渲染都读 1MB 文件。
+    """
+    global _echarts_cache
+    if inline and ECHARTS_LOCAL.exists():
+        if _echarts_cache is None:
+            try:
+                _echarts_cache = ECHARTS_LOCAL.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                _echarts_cache = ""
+        if _echarts_cache:
+            return f"<script>{_echarts_cache}</script>"
+    return f'<script src="{ECHARTS_CDN}"></script>'
 
 
 class ColorTheme:
-    """配色主题系统——所有主题都是精心调试过的商业级配色。"""
+    """配色主题系统——风格来自资产层，本类只做翻译与取值。"""
 
-    # ===== 5 套预设高级配色 =====
-    THEMES = {
-        "ocean": {      # 沧海商务：沉稳专业，适合金融/科技/正式汇报
-            "primary": ["#2B4C8C", "#4A7CF7", "#6EA8FE"],
-            "secondary": ["#6FC3A0", "#F5A623", "#E86868", "#8B6CD6"],
-            "bg": "#F7FAFC", "card_bg": "#FFFFFF",
-            "text": "#1A202C", "text_secondary": "#718096",
-            "border": "#E2E8F0",
-            "gradient": ["#2B4C8C", "#4A7CF7"],
-        },
-        "warm": {       # 朝霞温暖：亲和商务，适合消费/零售/运营
-            "primary": ["#D46B4A", "#F09B6A", "#F5B78A"],
-            "secondary": ["#5BA3A0", "#C49B6C", "#B45A5A", "#8FA87A"],
-            "bg": "#FDF8F3", "card_bg": "#FFFFFF",
-            "text": "#2D221C", "text_secondary": "#8B7D72",
-            "border": "#EDE0D4",
-            "gradient": ["#D46B4A", "#F09B6A"],
-        },
-        "aurora": {     # 极光科技：炫酷科技，适合互联网/大屏/创新
-            "primary": ["#0F172A", "#1E3A5F", "#2563EB"],
-            "secondary": ["#38BDF8", "#2DD4BF", "#F472B6", "#A78BFA"],
-            "bg": "#0A0F1E", "card_bg": "#1A2332",
-            "text": "#E2E8F0", "text_secondary": "#94A3B8",
-            "border": "#2D3A4A",
-            "gradient": ["#0F172A", "#2563EB"],
-        },
-        "forest": {     # 森林雅致：清新自然，适合环保/健康/教育
-            "primary": ["#2D6A4F", "#40916C", "#52B788"],
-            "secondary": ["#95D5B2", "#E9C46A", "#D4A373", "#A3B18A"],
-            "bg": "#F0F7F4", "card_bg": "#FFFFFF",
-            "text": "#1B3A2D", "text_secondary": "#5A7A6A",
-            "border": "#D8E6DF",
-            "gradient": ["#2D6A4F", "#52B788"],
-        },
-        "minimal": {    # 极简商务：极致简约，适合高管汇报/战略会议
-            "primary": ["#1A1A2E", "#16213E", "#2D3748"],
-            "secondary": ["#E2E8F0", "#A0AEC0", "#CBD5E0", "#718096"],
-            "bg": "#FFFFFF", "card_bg": "#F8F9FA",
-            "text": "#1A202C", "text_secondary": "#718096",
-            "border": "#E2E8F0",
-            "gradient": ["#1A1A2E", "#2D3748"],
-        },
-        "bento": {      # 便当盒网格（参考 UI_style.md #21）：苹果浅灰底 + 白卡，适合仪表盘
-            "primary": ["#0071E3", "#0A84FF", "#5AC8FA"],
-            "secondary": ["#FF453A", "#32D74B", "#FF9500", "#BF5AF2", "#FFD60A", "#64D2FF"],
-            "bg": "#F5F5F7", "card_bg": "#FFFFFF",
-            "text": "#1D1D1F", "text_secondary": "#86868B",
-            "border": "#D2D2D7",
-            "gradient": ["#0071E3", "#5AC8FA"],
-        },
-        "editorial": {  # 杂志编辑风（参考 UI_style.md #47）：奶白纸底 + 墨黑 + 古金，适合正式年报
-            "primary": ["#1A1A1A", "#2C3E50", "#34495E"],
-            "secondary": ["#B76E2E", "#8B0000", "#C0392B", "#7F8C8D", "#D4AC0D"],
-            "bg": "#F7F4EF", "card_bg": "#FFFFFF",
-            "text": "#1A1A1A", "text_secondary": "#5D6D7E",
-            "border": "#E5E0D8",
-            "gradient": ["#1A1A1A", "#B76E2E"],
-        },
-        "aurora_dark": { # 极光科技深色（参考 UI_style.md #10）：深蓝夜空 + 霓虹光晕，适合大屏投屏
-            "primary": ["#6366F1", "#A855F7", "#3B82F6"],
-            "secondary": ["#EC4899", "#06B6D4", "#F59E0B", "#10B981", "#8B5CF6", "#EF4444"],
-            "bg": "#0F172A", "card_bg": "#1E293B",
-            "text": "#F1F5F9", "text_secondary": "#94A3B8",
-            "border": "#334155",
-            "gradient": ["#6366F1", "#A855F7"],
-        },
-    }
+    #: 资产不可用时的兜底风格编号
+    FALLBACK = style_loader.DEFAULT_CODE
 
     @classmethod
-    def get(cls, name: str = "ocean") -> dict:
-        """获取主题配置。"""
-        return cls.THEMES.get(name, cls.THEMES["ocean"])
+    def get(cls, name: str = "") -> dict:
+        """
+        获取某风格的主题字典；未指定或无效时取默认风格。
+
+        额外补一个 `text_chart`：图表内部（坐标轴刻度、图例）用的文字色。
+        资产的 `text_secondary` 是为版式留白设计的浅灰，用作 12px 轴刻度时
+        对比度往往不足 4.5:1（浅色族尤甚），在投影上几乎看不见。
+        这里按背景自动加深到达标，不改资产本身。
+        """
+        t = dict(style_loader.theme(name or cls.FALLBACK))
+        t["text_chart"] = _readable(t.get("text_secondary", "#666666"),
+                                    t.get("bg", "#FFFFFF"), 4.5)
+        return t
 
     @classmethod
     def list_themes(cls) -> List[str]:
-        """列出所有可用主题。"""
-        return list(cls.THEMES.keys())
+        """列出全部可用风格编号。"""
+        return style_loader.codes()
+
+    @classmethod
+    def list_families(cls) -> List[dict]:
+        """列出全部风格族。"""
+        return style_loader.families()
+
+    @classmethod
+    def describe(cls, name: str) -> dict:
+        """风格的完整资产信息（供选型卡展示）。"""
+        s = style_loader.get_style(name)
+        if not s:
+            return {}
+        return {
+            "code": s["code"], "label": s["label"], "en": s.get("en", ""),
+            "family": s["family"], "tone": s.get("tone", ""),
+            "mood": s.get("mood", ""), "keywords": s.get("keywords", []),
+            "tokens": s["tokens"], "report_use": s.get("report_use", {}),
+            "taboos": s.get("taboos", []),
+        }
 
     @classmethod
     def build_series_colors(cls, theme: dict, count: int) -> List[str]:
-        """根据主题和数据系列数量生成系列色。"""
-        all_colors = theme["primary"] + theme["secondary"]
+        """按数据系列数量取图表配色。序列固定，超出部分循环取用并降透明。"""
+        all_colors = theme.get("series") or (theme["primary"] + theme["secondary"])
         if count <= len(all_colors):
             return all_colors[:count]
-        # 超过预设数量时循环取色并调整透明度
         colors = []
         for i in range(count):
             base = all_colors[i % len(all_colors)]
@@ -131,11 +179,11 @@ class ChartBuilder:
         option = {
             "color": colors,
             "tooltip": {"trigger": "axis", "backgroundColor": "rgba(255,255,255,0.95)", "borderColor": theme["border"], "borderWidth": 1, "textStyle": {"color": theme["text"], "fontSize": 13}},
-            "legend": {"data": data.get("series_names", []), "textStyle": {"color": theme["text_secondary"], "fontSize": 12}, "bottom": 0},
+            "legend": {"data": data.get("series_names", []), "textStyle": {"color": theme["text_chart"], "fontSize": 12}, "bottom": 0},
             "grid": {"left": "3%", "right": "4%", "bottom": "15%", "containLabel": True},
-            "xAxis": {"type": "category", "data": data.get("x", []), "axisLine": {"lineStyle": {"color": theme["border"]}}, "axisLabel": {"color": theme["text_secondary"]}},
-            "yAxis": {"type": "value", "splitLine": {"lineStyle": {"color": theme["border"], "type": "dashed"}}, "axisLabel": {"color": theme["text_secondary"]}},
-            "dataZoom": [{"type": "inside", "start": 0, "end": 100}, {"type": "slider", "start": 0, "end": 100, "height": 20, "bottom": 30, "borderColor": theme["border"], "textStyle": {"color": theme["text_secondary"]}}],
+            "xAxis": {"type": "category", "data": data.get("x", []), "axisLine": {"lineStyle": {"color": theme["border"]}}, "axisLabel": {"color": theme["text_chart"]}},
+            "yAxis": {"type": "value", "splitLine": {"lineStyle": {"color": theme["border"], "type": "dashed"}}, "axisLabel": {"color": theme["text_chart"]}},
+            "dataZoom": [{"type": "inside", "start": 0, "end": 100}, {"type": "slider", "start": 0, "end": 100, "height": 20, "bottom": 30, "borderColor": theme["border"], "textStyle": {"color": theme["text_chart"]}}],
             "series": [],
             **animation,
         }
@@ -163,10 +211,10 @@ class ChartBuilder:
         option = {
             "color": colors,
             "tooltip": {"trigger": "axis", "backgroundColor": "rgba(255,255,255,0.95)", "borderColor": theme["border"], "borderWidth": 1, "textStyle": {"color": theme["text"], "fontSize": 13}},
-            "legend": {"data": data.get("series_names", []), "textStyle": {"color": theme["text_secondary"]}},
+            "legend": {"data": data.get("series_names", []), "textStyle": {"color": theme["text_chart"]}},
             "grid": {"left": "3%", "right": "4%", "bottom": "3%", "containLabel": True},
-            "xAxis": {"type": "category", "data": data.get("x", []), "axisLabel": {"color": theme["text_secondary"]}, "axisLine": {"lineStyle": {"color": theme["border"]}}},
-            "yAxis": {"type": "value", "splitLine": {"lineStyle": {"color": theme["border"], "type": "dashed"}}, "axisLabel": {"color": theme["text_secondary"]}},
+            "xAxis": {"type": "category", "data": data.get("x", []), "axisLabel": {"color": theme["text_chart"]}, "axisLine": {"lineStyle": {"color": theme["border"]}}},
+            "yAxis": {"type": "value", "splitLine": {"lineStyle": {"color": theme["border"], "type": "dashed"}}, "axisLabel": {"color": theme["text_chart"]}},
             "series": [],
             **ChartBuilder.get_animation_config(),
         }
@@ -220,7 +268,7 @@ class ChartBuilder:
             "color": colors,
             "tooltip": {"trigger": "item", "backgroundColor": "rgba(255,255,255,0.95)", "borderColor": theme["border"], "borderWidth": 1,
                 "formatter": "{b}: {c} ({d}%)", "textStyle": {"color": theme["text"]}},
-            "legend": {"data": [i["name"] for i in items], "textStyle": {"color": theme["text_secondary"]}, "type": "scroll", "bottom": 0},
+            "legend": {"data": [i["name"] for i in items], "textStyle": {"color": theme["text_chart"]}, "type": "scroll", "bottom": 0},
             "series": [{
                 "type": "pie",
                 "radius": is_ring and ["35%", "60%"] or "50%",
@@ -249,7 +297,7 @@ class ChartBuilder:
         items = data.get("data", [])
         option = {
             "tooltip": {"trigger": "item", "formatter": "{b}: {c} ({d}%)"},
-            "legend": {"data": [i["name"] for i in items], "textStyle": {"color": theme["text_secondary"]}},
+            "legend": {"data": [i["name"] for i in items], "textStyle": {"color": theme["text_chart"]}},
             "series": [{
                 "type": "funnel", "left": "10%", "top": 40, "bottom": 40,
                 "width": "80%", "minSize": "10%", "maxSize": "100%",
@@ -273,7 +321,7 @@ class ChartBuilder:
         option = {
             "color": colors,
             "tooltip": {"trigger": "item", "backgroundColor": "rgba(255,255,255,0.95)", "borderColor": theme["border"]},
-            "legend": {"data": [s.get("name", "") for s in series_data], "textStyle": {"color": theme["text_secondary"]}, "bottom": 0},
+            "legend": {"data": [s.get("name", "") for s in series_data], "textStyle": {"color": theme["text_chart"]}, "bottom": 0},
             "radar": {
                 "indicator": [{"name": ind.get("name", ""), "max": ind.get("max", 100)} for ind in indicators],
                 "radius": "60%",
@@ -296,19 +344,28 @@ class ChartBuilder:
 
     @staticmethod
     def scatter(data: dict, theme: dict, colors: List[str]) -> dict:
-        """散点图/气泡图。"""
+        """
+        散点图/气泡图。
+
+        symbolSize 用数组 [min,max] 时，ECharts 会拿数据的**第 3 维**做映射；
+        若数据只有 [x,y] 两维，就会拿 y 值映射大小——销量从 8 到 350 会让点大小
+        差出百倍，图上出现「超大点 + 密集小点」，完全不可读。
+        因此只有真给了第 3 维才启用大小映射，否则用固定尺寸。
+        """
         series_data = data.get("data", data.get("series", []))
+        has_size = (bool(series_data) and isinstance(series_data[0], (list, tuple))
+                    and len(series_data[0]) >= 3)
         option = {
             "color": colors,
             "tooltip": {"trigger": "item", "formatter": "{c}", "backgroundColor": "rgba(255,255,255,0.95)", "borderColor": theme["border"]},
             "grid": {"left": "3%", "right": "4%", "bottom": "3%", "containLabel": True},
-            "xAxis": {"type": "value", "splitLine": {"lineStyle": {"color": theme["border"], "type": "dashed"}}, "axisLabel": {"color": theme["text_secondary"]}},
-            "yAxis": {"type": "value", "splitLine": {"lineStyle": {"color": theme["border"], "type": "dashed"}}, "axisLabel": {"color": theme["text_secondary"]}},
+            "xAxis": {"type": "value", "splitLine": {"lineStyle": {"color": theme["border"], "type": "dashed"}}, "axisLabel": {"color": theme["text_chart"]}},
+            "yAxis": {"type": "value", "splitLine": {"lineStyle": {"color": theme["border"], "type": "dashed"}}, "axisLabel": {"color": theme["text_chart"]}},
             "series": [{
                 "type": "scatter", "data": series_data,
-                # v3.1：symbolSize 使用 [min,max] 范围（ECharts 按数据值自动映射），替代 lambda
-                "symbolSize": [5, 50],
-                "itemStyle": {"shadowBlur": 10, "shadowColor": "rgba(0,0,0,0.1)"},
+                "symbolSize": [5, 40] if has_size else 9,
+                "itemStyle": {"shadowBlur": 10, "shadowColor": "rgba(0,0,0,0.1)",
+                              "opacity": 0.75},
                 "emphasis": {"itemStyle": {"shadowBlur": 20, "shadowColor": "rgba(0,0,0,0.2)"}},
                 **ChartBuilder.get_animation_config(),
             }],
@@ -321,8 +378,8 @@ class ChartBuilder:
         option = {
             "tooltip": {"position": "top", "formatter": "{c}", "backgroundColor": "rgba(255,255,255,0.95)"},
             "grid": {"left": "5%", "right": "5%", "bottom": "10%", "containLabel": True},
-            "xAxis": {"type": "category", "data": data.get("x", []), "splitArea": {"show": True}, "axisLabel": {"color": theme["text_secondary"]}},
-            "yAxis": {"type": "category", "data": data.get("y", []), "splitArea": {"show": True}, "axisLabel": {"color": theme["text_secondary"]}},
+            "xAxis": {"type": "category", "data": data.get("x", []), "splitArea": {"show": True}, "axisLabel": {"color": theme["text_chart"]}},
+            "yAxis": {"type": "category", "data": data.get("y", []), "splitArea": {"show": True}, "axisLabel": {"color": theme["text_chart"]}},
             "visualMap": {"min": data.get("min", 0), "max": data.get("max", 100), "calculable": True, "orient": "horizontal", "left": "center", "bottom": 0,
                 "inRange": {"color": [f"{theme['primary'][0]}33", theme["primary"][0], theme["primary"][-1]]}},
             "series": [{
@@ -370,9 +427,9 @@ class ChartBuilder:
                     "colorStops": [{"offset": 0, "color": colors[0]}, {"offset": 1, "color": colors[1]}]}}},
                 "pointer": {"show": True, "length": "60%", "width": 4},
                 "axisLine": {"lineStyle": {"width": 12, "color": [[1, theme["border"]]]}},
-                "axisTick": {"length": 6, "lineStyle": {"color": theme["text_secondary"]}},
-                "splitLine": {"length": 10, "lineStyle": {"color": theme["text_secondary"]}},
-                "axisLabel": {"color": theme["text_secondary"], "distance": 20},
+                "axisTick": {"length": 6, "lineStyle": {"color": theme["text_chart"]}},
+                "splitLine": {"length": 10, "lineStyle": {"color": theme["text_chart"]}},
+                "axisLabel": {"color": theme["text_chart"], "distance": 20},
                 "detail": {"valueAnimation": True, "formatter": "{value}%", "color": theme["text"], "fontSize": 28, "fontWeight": "bold", "offsetCenter": [0, "40%"]},
                 "data": [{"value": value, "name": name}],
                 **ChartBuilder.get_animation_config(),
@@ -457,10 +514,34 @@ class RenderEngine:
     - Tooltip/图例切换/数据缩放等交互全开
     """
 
-    def __init__(self, theme_name: str = "ocean"):
-        """初始化渲染引擎，指定配色主题。"""
-        self.theme_name = theme_name
+    def __init__(self, theme_name: str = "", inline_assets: bool = True):
+        """
+        初始化渲染引擎。
+
+        参数:
+            theme_name: 风格编号（留空取资产库默认风格）
+            inline_assets: 是否把 ECharts 内联进 HTML。默认 True —— 保证报表
+                离线可打开（投屏、邮件、内网）。设为 False 则用 CDN 引用，文件更小但需联网。
+        """
         self.theme = ColorTheme.get(theme_name)
+        self.theme_name = self.theme.get("name") or (theme_name or ColorTheme.FALLBACK)
+        self.inline_assets = inline_assets
+        # 元素 id 序号：同一份报表里若两个图表的数据完全相同，
+        # 纯按数据 hash 生成 id 会撞车（后一个 echarts.init 拿到同一个 DOM）。
+        self._el_seq = 0
+
+    def _echarts_tag(self) -> str:
+        """ECharts 的 script 标签（内联 or CDN）。"""
+        return echarts_script_tag(inline=self.inline_assets)
+
+    def _next_el_id(self, prefix: str, seed: Any = "") -> str:
+        """生成报表内唯一的元素 id（数据指纹 + 递增序号）。"""
+        self._el_seq += 1
+        try:
+            digest = abs(hash(json.dumps(seed, sort_keys=True, default=str))) % 10000
+        except Exception:
+            digest = 0
+        return f"{prefix}_{digest}_{self._el_seq}"
 
     def render_web_dashboard(self, layout: Dict) -> str:
         """
@@ -498,7 +579,10 @@ class RenderEngine:
                 sections_html += html
                 chart_scripts += script
             elif section_type == "conclusion":
-                sections_html += self._render_conclusion(section.get("insights", []))
+                sections_html += self._render_conclusion(
+                    section.get("insights", []), section.get("title", "数据洞察"))
+            elif section_type == "prose":
+                sections_html += self._render_prose(section)
             elif section_type == "table":
                 sections_html += self._render_table(section)
             elif section_type == "custom":
@@ -513,12 +597,20 @@ class RenderEngine:
             if _.get("type") == "chart"
         )
 
+        # 有封面板块（B01）时不渲染顶部 header：
+        # 否则第一屏会出现两次标题（header 的 h1 与封面板块 h2 同名），
+        # 数据源信息也会重复（header 的 meta 与封面的 eyebrow）。
+        has_cover = any(
+            s.get("type") == "prose" and s.get("variant") == "cover"
+            for s in layout.get("sections", [])
+        )
         html = self._build_html_template(
             title=layout.get("title", "数据报表"),
             meta=layout.get("generated_at", ""),
             sections_html=sections_html,
             chart_scripts=chart_scripts,
             chart_count=chart_count,
+            has_cover=has_cover,
         )
         return html
 
@@ -548,7 +640,10 @@ class RenderEngine:
             elif item_type == "table":
                 items_html += self._render_table(item)
             elif item_type == "conclusion":
-                items_html += self._render_conclusion(item.get("insights", []))
+                items_html += self._render_conclusion(
+                    item.get("insights", []), item.get("title", "数据洞察"))
+            elif item_type == "prose":
+                items_html += self._render_prose(item)
             elif item_type == "custom":
                 items_html += item.get("html", "")
 
@@ -570,9 +665,21 @@ class RenderEngine:
     </section>"""
 
     def _build_html_template(self, title: str, meta: str, sections_html: str,
-                              chart_scripts: str, chart_count: int) -> str:
-        """构建完整 HTML 页面（v3.0 增强版：分区网格 + 数据解读区 + 便当盒布局）。"""
+                              chart_scripts: str, chart_count: int,
+                              has_cover: bool = False) -> str:
+        """构建完整 HTML 页面（风格 token 来自资产层 + prose 板块 + 密度感知间距）。"""
         t = self.theme
+        gap = t.get("gap", 20)
+        pad = t.get("pad", 24)
+        echarts_tag = self._echarts_tag()
+
+        # has_cover 为真时省略 header —— 封面板块自己就是标题区
+        header_html = "" if has_cover else f"""
+        <div class="header">
+            <h1>{title}</h1>
+            <div class="meta">{meta}</div>
+            <div class="divider"></div>
+        </div>"""
 
         return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -580,11 +687,12 @@ class RenderEngine:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{title}</title>
-    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+    {echarts_tag}
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{ font-family: 'PingFang SC', 'Microsoft YaHei', -apple-system, sans-serif;
-               background: {t['bg']}; color: {t['text']}; }}
+               background: {t['bg']}; color: {t['text']};
+               --pad: {pad}px; }}
         .dashboard {{ max-width: 1440px; margin: 0 auto; padding: 32px 32px 64px; }}
         .header {{ text-align: center; padding: 24px 0 32px; }}
         .header h1 {{ font-size: 28px; color: {t['primary'][0]}; letter-spacing: 1px; }}
@@ -683,20 +791,43 @@ class RenderEngine:
         .conclusion li:last-child {{ border-bottom: none; }}
         .conclusion li::before {{ content: "—"; color: {t['primary'][0]}; font-size: 14px; flex-shrink: 0; }}
 
-        @@keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(10px); }} to {{ opacity: 1; transform: translateY(0); }} }}
+        /* 通用文本板块（prose）——承载封面/摘要/目录/风险机会/口径/方法论/附录/结尾 */
+        .prose-block {{ background: {t['card_bg']}; border-radius: 14px; padding: var(--pad, 24px);
+                        box-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 4px 16px rgba(0,0,0,0.04);
+                        margin-bottom: {gap}px; }}
+        .prose-block.plain {{ background: transparent; box-shadow: none; padding: 0; }}
+        .prose-eyebrow {{ display: inline-block; font-size: 12px; letter-spacing: .08em;
+                          color: {t['text_secondary']}; margin-bottom: 8px; }}
+        .prose-title {{ font-size: 20px; font-weight: 700; color: {t['text']};
+                        display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }}
+        .prose-title::before {{ content: ""; display: inline-block; width: 4px; height: 20px;
+                                 border-radius: 2px; background: {t['primary'][0]}; }}
+        .prose-body {{ font-size: 15px; line-height: 1.75; color: {t['text']}; }}
+        .prose-body p {{ margin-bottom: 10px; }}
+        .prose-body p:last-child {{ margin-bottom: 0; }}
+        .prose-body ol, .prose-body ul {{ padding-left: 22px; }}
+        .prose-body li {{ margin-bottom: 8px; }}
+        .prose-body .muted {{ color: {t['text_secondary']}; font-size: 13px; }}
+        .prose-cols {{ display: grid; grid-template-columns: repeat(var(--prose-cols, 1), 1fr);
+                       gap: {gap}px; }}
+        .prose-badge {{ display: inline-block; font-size: 12px; padding: 2px 10px; border-radius: 999px;
+                        background: {t['bg']}; border: 1px solid {t['border']};
+                        color: {t['text_secondary']}; margin-right: 8px; }}
+        .prose-cover {{ text-align: center; }}
+        .prose-cover .prose-title {{ justify-content: center; font-size: 28px; }}
+        .prose-cover .prose-title::before {{ display: none; }}
+
+        @keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(10px); }} to {{ opacity: 1; transform: translateY(0); }} }}
         .kpi-row {{ animation: fadeIn 0.5s ease-out; }}
         .section-group {{ animation: fadeIn 0.6s ease-out; }}
         .chart-box {{ animation: fadeIn 0.6s ease-out; }}
         .conclusion {{ animation: fadeIn 0.7s ease-out; }}
+        .prose-block {{ animation: fadeIn 0.7s ease-out; }}
+        @media (max-width: 900px) {{ .prose-cols {{ grid-template-columns: 1fr !important; }} }}
     </style>
 </head>
 <body>
-    <div class="dashboard">
-        <div class="header">
-            <h1>{title}</h1>
-            <div class="meta">{meta}</div>
-            <div class="divider"></div>
-        </div>
+    <div class="dashboard">{header_html}
         {sections_html}
     </div>
     <script>
@@ -745,7 +876,7 @@ class RenderEngine:
         渲染单个图表，返回 (html, script) 元组（v3.0 增强：span 跨列 + 数据解读区）。
         使用 ChartBuilder 构建 ECharts option，支持 15+ 图表类型。
         """
-        chart_id = f"chart_{abs(hash(json.dumps(section.get('data', {}), sort_keys=True))) % 100000}"
+        chart_id = self._next_el_id("chart", section.get("data", {}))
         chart_type = section.get("chart_type", "bar")
         data = section.get("data", {})
         data["chart_type"] = chart_type
@@ -804,14 +935,93 @@ class RenderEngine:
         """
         return html, script
 
-    def _render_conclusion(self, insights: List[str]) -> str:
+    def _render_conclusion(self, insights: List[str], title: str = "数据洞察") -> str:
         """渲染数据结论区域（使用主题色装饰，无emoji）。"""
         items = "".join([f"<li>{i}</li>" for i in insights])
         return f"""
         <div class="conclusion">
-            <h3><span class="conclusion-bar"></span>数据洞察</h3>
+            <h3><span class="conclusion-bar"></span>{title}</h3>
             <ul>{items}</ul>
         </div>"""
+
+    def _render_prose(self, section: Dict) -> str:
+        """
+        渲染结构化文本板块（v4.0 新增）。
+
+        承载板块库中 11 个非图表板块：封面页 / 执行摘要 / 目录导航 /
+        风险与机会 / 口径定义 / 数据质量 / 分析方法论 / 附录 / 结尾。
+
+        section 格式：
+            {
+              "type": "prose",
+              "title": "执行摘要",
+              "eyebrow": "01 / 摘要",            # 可选，标题上方小标签
+              "badge": "必需",                    # 可选，标题右侧标记
+              "variant": "cover" | "plain",        # 可选，封面居中 / 无卡片底
+              "body": "第一段\n\n第二段",          # 可选，按空行分段
+              "items": ["条目", {"text": "...", "badge": "高"}],   # 可选，有序列表
+              "panels": [{"title": "风险", "items": ["..."]}],     # 可选，多栏并列
+              "columns": 2                        # 可选，panels 的栏数，默认 2
+            }
+        """
+        variant = section.get("variant", "")
+        classes = ["prose-block"]
+        if variant == "plain":
+            classes.append("plain")
+        elif variant == "cover":
+            classes.append("prose-cover")
+
+        title = section.get("title", "")
+        eyebrow = section.get("eyebrow", "")
+        badge = section.get("badge", "")
+
+        head = ""
+        if eyebrow:
+            head += f'<span class="prose-eyebrow">{eyebrow}</span>'
+        if title:
+            badge_html = f'<span class="prose-badge">{badge}</span>' if badge else ""
+            head += f'<h2 class="prose-title">{title}{badge_html}</h2>'
+
+        body_html = ""
+        raw_body = section.get("body", "")
+        if raw_body:
+            paras = [p.strip() for p in str(raw_body).split("\n") if p.strip()]
+            body_html += "".join(f"<p>{p}</p>" for p in paras)
+
+        items = section.get("items") or []
+        if items:
+            lis = []
+            for it in items:
+                if isinstance(it, dict):
+                    badge_it = f'<span class="prose-badge">{it["badge"]}</span>' \
+                        if it.get("badge") else ""
+                    lis.append(f'<li>{badge_it}{it.get("text", "")}</li>')
+                else:
+                    lis.append(f"<li>{it}</li>")
+            body_html += f"<ol>{''.join(lis)}</ol>"
+
+        panels = section.get("panels") or []
+        panels_html = ""
+        if panels:
+            cols = max(1, min(4, int(section.get("columns", len(panels)))))
+            cards = []
+            for p in panels:
+                plis = "".join(
+                    f"<li>{x.get('text', '') if isinstance(x, dict) else x}</li>"
+                    for x in (p.get("items") or [])
+                )
+                pt = f'<h3 class="prose-title" style="font-size:16px">{p.get("title", "")}</h3>' \
+                    if p.get("title") else ""
+                cards.append(f"<div>{pt}<ul>{plis}</ul></div>")
+            panels_html = (f'<div class="prose-cols" style="--prose-cols:{cols}">'
+                           f'{"".join(cards)}</div>')
+
+        inner = body_html + panels_html
+        if not inner:
+            inner = '<p class="muted">（本节暂无内容）</p>'
+
+        return (f'\n    <section class="{" ".join(classes)}">'
+                f'{head}<div class="prose-body">{inner}</div></section>')
 
     def _render_table(self, section: dict) -> str:
         """
@@ -832,7 +1042,7 @@ class RenderEngine:
         rows = list(section.get("rows", []))
         title = section.get("title", "明细数据")
         collapsible = section.get("collapsible", True)
-        table_id = f"table_{abs(hash(title)) % 100000}"
+        table_id = self._next_el_id("table", title)
 
         # 如果没给表头，从第一行数据推断
         if not columns and rows:
@@ -905,6 +1115,6 @@ class RenderEngine:
         return html.encode('utf-8')
 
     def set_theme(self, theme_name: str):
-        """动态切换配色主题。"""
-        self.theme_name = theme_name
+        """动态切换风格。"""
         self.theme = ColorTheme.get(theme_name)
+        self.theme_name = self.theme.get("name") or (theme_name or ColorTheme.FALLBACK)

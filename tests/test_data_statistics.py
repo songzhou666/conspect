@@ -29,9 +29,9 @@ class TestDataStatistics(unittest.TestCase):
         self.assertEqual(stats["max"], 500)
     
     def test_calc_concentration(self):
-        """测试集中度计算"""
-        values = [500, 200, 100, 50, 30]
-        concentration = self.statistics.calc_concentration(values)
+        """测试集中度计算（入参为 维度→数值 的映射，非列表）"""
+        dimension_data = {"A": 500, "B": 200, "C": 100, "D": 50, "E": 30}
+        concentration = self.statistics.calc_concentration(dimension_data)
         self.assertIn("cr4", concentration)
         self.assertIn("hhi", concentration)
         self.assertGreater(concentration["cr4"], 0)
